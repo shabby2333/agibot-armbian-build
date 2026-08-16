@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Armbian AGIBOT bring-up <noreply@armbian.com>
+Date: Sat, 15 Aug 2026 12:00:00 +0000
+Subject: [PATCH] arm: dts: add AGIBOT MB0002 V2 U-Boot control DT
+
+Keep the U-Boot control DT deliberately smaller than the Linux board DT,
+but include the board's confirmed USB recovery path as well as UART2 and
+eMMC.  The external USB sockets are behind two Genesys hubs whose reset
+inputs are GPIO4_D2/D3; U-Boot must release both before scanning USB.
+
+The live factory DT reports the eMMC at fe2e0000 as an 8-bit HS400 device
+with enhanced strobe. The board has no SD socket or boot SPI flash, so keep
+those controllers disabled and make the SPL boot order unambiguously eMMC.
+SW9200 is intentionally not described until its U-Boot ADC path can be
+validated independently.
+
+Signed-off-by: Armbian AGIBOT bring-up <noreply@armbian.com>
+---
+ arch/arm/dts/rk3588-agibot-mb0002-v2.dts | 229 +++++++++++++++++++++++
+ 1 file changed, 229 insertions(+)
+ create mode 100644 arch/arm/dts/rk3588-agibot-mb0002-v2.dts
+
+diff --git a/arch/arm/dts/rk3588-agibot-mb0002-v2.dts b/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
+new file mode 100644
+index 00000000000..75815a51911
+--- /dev/null
++++ b/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
+@@ -0,0 +1,229 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * U-Boot control device tree for AGIBOT MB0002 V2.
++ *
++ * This is intentionally not a Linux hardware description. It contains only
++ * the verified resources needed to reach an Armbian image on eMMC and retain
++ * a visible/recoverable serial console.
++ */
++
++/dts-v1/;
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include "rk3588.dtsi"
++#include "rk3588-u-boot.dtsi"
++
++/ {
++	model = "Rockchip RK3588 AGIBOT MB0002 V2 Board";
++	compatible = "rockchip,rk3588-agibot-mb0002-v2", "rockchip,rk3588";
++
++	/*
++	 * Factory SW9200 loader key: SARADC channel 1, active near 0 V.
++	 *
++	 * Keep the bus and child in the final U-Boot DTB with dm-spl, but do
++	 * not bind the key during the pre-console dm-pre-reloc scan. Probing
++	 * the ADC key that early can stall RK3588 while its CRU/reset path is
++	 * not ready yet.
++	 */
++	adc-keys {
++		compatible = "adc-keys";
++		io-channels = <&saradc 1>;
++		io-channel-names = "buttons";
++		keyup-threshold-microvolt = <1800000>;
++		u-boot,dm-spl;
++		status = "okay";
++
++		loader-key {
++			u-boot,dm-spl;
++			linux,code = <KEY_VOLUMEUP>;
++			label = "SW9200 loader";
++			press-threshold-microvolt = <1750>;
++		};
++	};
++
++	chosen {
++		stdout-path = "serial2:1500000n8";
++		u-boot,spl-boot-order = &sdhci;
++	};
++
++	vcc12v_dcin: vcc12v-dcin {
++		u-boot,dm-pre-reloc;
++		compatible = "regulator-fixed";
++		regulator-name = "vcc12v_dcin";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <12000000>;
++		regulator-max-microvolt = <12000000>;
++	};
++
++	vcc5v0_sys: vcc5v0-sys {
++		u-boot,dm-pre-reloc;
++		compatible = "regulator-fixed";
++		regulator-name = "vcc5v0_sys";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&vcc12v_dcin>;
++	};
++
++	vcc5v0_host: vcc5v0-host {
++		u-boot,dm-pre-reloc;
++		compatible = "regulator-fixed";
++		regulator-name = "vcc5v0_host";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&vcc5v0_sys>;
++	};
++};
++
++/* Release both Genesys hub resets before U-Boot performs its USB scan. */
++&gpio4 {
++	u-boot,dm-pre-reloc;
++	pinctrl-names = "default";
++	pinctrl-0 = <&usb_hub_reset_pins>;
++
++	usb-hub1-enable-hog {
++		u-boot,dm-pre-reloc;
++		gpio-hog;
++		gpios = <RK_PD2 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "usb-hub1-enable";
++	};
++
++	usb-hub2-enable-hog {
++		u-boot,dm-pre-reloc;
++		gpio-hog;
++		gpios = <RK_PD3 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "usb-hub2-enable";
++	};
++};
++
++&pinctrl {
++	usb-hub {
++		u-boot,dm-pre-reloc;
++
++		usb_hub_reset_pins: usb-hub-reset-pins {
++			u-boot,dm-pre-reloc;
++			rockchip,pins =
++				<4 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>,
++				<4 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++};
++
++&usb2phy1_grf {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&u2phy1 {
++	u-boot,dm-pre-reloc;
++	rockchip,usbctrl-grf = <&usb_grf>;
++	status = "okay";
++};
++
++&u2phy1_otg {
++	u-boot,dm-pre-reloc;
++	rockchip,sel-pipe-phystatus;
++	status = "okay";
++};
++
++&usbdrd3_1 {
++	u-boot,dm-pre-reloc;
++	dr_mode = "host";
++	status = "okay";
++};
++
++&usbdrd_dwc3_1 {
++	u-boot,dm-pre-reloc;
++	dr_mode = "host";
++	maximum-speed = "high-speed";
++	status = "okay";
++};
++
++/* The second USB2 Genesys hub is connected to the dedicated HOST0 PHY. */
++&usb2phy2_grf {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&u2phy2 {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&u2phy2_host {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&usb_host0_ehci {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&usb_host0_ohci {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++/* Keep the remaining direct USB2 host port available in U-Boot as well. */
++&usb2phy3_grf {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&u2phy3 {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&u2phy3_host {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&usb_host1_ehci {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&usb_host1_ohci {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++};
++
++&uart2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart2m0_xfer>;
++	status = "okay";
++};
++
++&sdhci {
++	bus-width = <8>;
++	no-sdio;
++	no-sd;
++	non-removable;
++	mmc-hs200-1_8v;
++	mmc-hs400-1_8v;
++	mmc-hs400-enhanced-strobe;
++	status = "okay";
++};
++
++/* MB0002 V2 has neither an SD socket nor a boot SPI flash. */
++&sdmmc {
++	status = "disabled";
++};
++
++&sfc {
++	status = "disabled";
++};
++
++/* The download key is sampled by U-Boot proper after early DM init. */
++&saradc {
++	status = "okay";
++};
+-- 
+2.43.0
