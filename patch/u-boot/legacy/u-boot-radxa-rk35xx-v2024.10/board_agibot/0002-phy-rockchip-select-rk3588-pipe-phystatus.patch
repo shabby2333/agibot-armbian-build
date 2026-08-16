@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Armbian AGIBOT bring-up <noreply@armbian.com>
+Date: Sun, 16 Aug 2026 02:00:00 +0000
+Subject: [PATCH] phy: rockchip: select RK3588 PIPE phystatus for USB2
+
+The RK3588 USB3 OTG controllers can use their USB2 PHY while the USB3 PHY
+is not described.  In that configuration the controller's PIPE phystatus
+must be selected from USBGRF.  Without this write the xHCI root port remains
+in Polling with CCS set but PED clear and U-Boot reports "cannot reset port".
+
+Backport the small part of the Rockchip Linux USB2 PHY implementation that
+parses rockchip,usbctrl-grf and rockchip,sel-pipe-phystatus.  Add both RK3588
+OTG register descriptions; USB3_1 uses offset 0x34 and writes 0xffff0189.
+
+Signed-off-by: Armbian AGIBOT bring-up <noreply@armbian.com>
+---
+ drivers/phy/phy-rockchip-inno-usb2.c | 33 ++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/drivers/phy/phy-rockchip-inno-usb2.c b/drivers/phy/phy-rockchip-inno-usb2.c
+index 6d85b55cb35..987fa3be3b6 100644
+--- a/drivers/phy/phy-rockchip-inno-usb2.c
++++ b/drivers/phy/phy-rockchip-inno-usb2.c
+@@ -80,6 +80,7 @@ struct rockchip_usb2phy;
+ /**
+  * struct rockchip_usb2phy_port_cfg: usb-phy port configuration.
+  * @phy_sus: phy suspend register.
++ * @pipe_phystatus: select pipe phystatus from grf or phy.
+  * @bvalid_det_en: vbus valid rise detection enable register.
+  * @bvalid_det_st: vbus valid rise detection status register.
+  * @bvalid_det_clr: vbus valid rise detection clear register.
+@@ -104,6 +105,7 @@ struct rockchip_usb2phy;
+  */
+ struct rockchip_usb2phy_port_cfg {
+ 	struct usb2phy_reg	phy_sus;
++	struct usb2phy_reg	pipe_phystatus;
+ 	struct usb2phy_reg	bvalid_det_en;
+ 	struct usb2phy_reg	bvalid_det_st;
+ 	struct usb2phy_reg	bvalid_det_clr;
+@@ -150,6 +152,7 @@ struct rockchip_usb2phy_cfg {
+  *		     primary stage.
+  * @grf: General Register Files register base.
+  * @usbgrf_base : USB General Register Files register base.
++ * @usbctrl_grf_base: USB controller General Register Files register base.
+  * @phy_base: the base address of USB PHY.
+  * @phy_rst: phy reset control.
+  * @vbus_det_gpio: VBUS detection via GPIO.
+@@ -160,6 +163,7 @@ struct rockchip_usb2phy {
+ 	u8		primary_retries;
+ 	struct regmap	*grf_base;
+ 	struct regmap	*usbgrf_base;
++	struct regmap	*usbctrl_grf_base;
+ 	void __iomem	*phy_base;
+ 	struct udevice	*vbus_supply[USB2PHY_NUM_PORTS];
+ 	struct reset_ctl phy_rst;
+@@ -513,6 +517,16 @@ static int rockchip_usb2phy_init(struct phy *phy)
+ 		return -EINVAL;
+ 	}
+ 
++	if (dev_read_bool(phy->dev, "rockchip,sel-pipe-phystatus")) {
++		if (!rphy->usbctrl_grf_base) {
++			dev_err(phy->dev, "usbctrl-grf is required\n");
++			return -EINVAL;
++		}
++
++		property_enable(rphy->usbctrl_grf_base,
++				&port_cfg->pipe_phystatus, true);
++	}
++
+ 	property_enable(base, &port_cfg->phy_sus, false);
+ 
+ 	/* waiting for the utmi_clk to become stable */
+@@ -683,6 +697,23 @@ static int rockchip_usb2phy_probe(struct udevice *dev)
+ 		rphy->usbgrf_base = NULL;
+ 	}
+ 
++	if (dev_read_bool(dev, "rockchip,usbctrl-grf")) {
++		ret = uclass_get_device_by_phandle(UCLASS_SYSCON, dev,
++						   "rockchip,usbctrl-grf", &syscon);
++		if (ret) {
++			dev_err(dev, "get syscon usbctrl grf failed\n");
++			return ret;
++		}
++
++		rphy->usbctrl_grf_base = syscon_get_regmap(syscon);
++		if (rphy->usbctrl_grf_base <= 0) {
++			dev_err(dev, "get syscon usbctrl grf regmap failed\n");
++			return -EINVAL;
++		}
++	} else {
++		rphy->usbctrl_grf_base = NULL;
++	}
++
+ 	if (!strncmp(parent->name, "root_driver", 11)) {
+ 		ret = dev_read_resource(dev, 0, &res);
+ 		reg = res.start;
+@@ -1939,6 +1970,7 @@ static const struct rockchip_usb2phy_cfg rk3588_phy_cfgs[] = {
+ 		.port_cfgs	= {
+ 			[USB2PHY_PORT_OTG] = {
+ 				.phy_sus	= { 0x000c, 11, 11, 0, 1 },
++				.pipe_phystatus = { 0x001c, 15, 0, 0x1100, 0x0189 },
+ 				.ls_det_en	= { 0x0080, 0, 0, 0, 1 },
+ 				.ls_det_st	= { 0x0084, 0, 0, 0, 1 },
+ 				.ls_det_clr	= { 0x0088, 0, 0, 0, 1 },
+@@ -1970,6 +2002,7 @@ static const struct rockchip_usb2phy_cfg rk3588_phy_cfgs[] = {
+ 			/* Select suspend control from controller */
+ 			[USB2PHY_PORT_OTG] = {
+ 				.phy_sus	= { 0x000c, 11, 11, 0, 0 },
++				.pipe_phystatus = { 0x0034, 15, 0, 0x1100, 0x0189 },
+ 				.ls_det_en	= { 0x0080, 0, 0, 0, 1 },
+ 				.ls_det_st	= { 0x0084, 0, 0, 0, 1 },
+ 				.ls_det_clr	= { 0x0088, 0, 0, 0, 1 },
+-- 
+2.43.0

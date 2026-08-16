@@ -1,0 +1,181 @@
+From 0eee513e77b6a7855cbee7bb55516cd40d3d7aa9 Mon Sep 17 00:00:00 2001
+From: Armbian AGIBOT bring-up <noreply@armbian.com>
+Date: Sun, 16 Aug 2026 02:30:00 +0000
+Subject: [PATCH] board: rockchip: reset AGIBOT USB hubs before scan
+
+The MB0002 V2 Genesys hubs do not reliably leave reset if U-Boot only configures GPIO4_D2/D3 as output-high. The USB3DRD1 upstream then reports the USB2.1 hub at full speed and xHCI fails Address Device.
+
+Describe the active-low reset GPIOs and generate a 100 ms assert plus 200 ms settling delay from the RK3588 board late-init hook. Scope the hook to the AGIBOT compatible.
+
+Also complete the RK3588 USB2 PHY transmitter tuning values used by the vendor driver and verified on this board.
+
+Signed-off-by: Armbian AGIBOT bring-up <noreply@armbian.com>
+---
+ arch/arm/dts/rk3588-agibot-mb0002-v2.dts | 25 +++------
+ board/rockchip/evb_rk3588/evb_rk3588.c   | 66 ++++++++++++++++++++++++
+ drivers/phy/phy-rockchip-inno-usb2.c     | 23 +++++++++
+ 3 files changed, 97 insertions(+), 17 deletions(-)
+
+diff --git a/arch/arm/dts/rk3588-agibot-mb0002-v2.dts b/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
+index 1c95d8e..28bd1c6 100644
+--- a/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
++++ b/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
+@@ -52,29 +52,20 @@
+ 		regulator-max-microvolt = <5000000>;
+ 		vin-supply = <&vcc5v0_sys>;
+ 	};
++
++	usb-hub-reset {
++		u-boot,dm-pre-reloc;
++		compatible = "agibot,mb0002-v2-usb-hub-reset";
++		reset-gpios = <&gpio4 RK_PD2 GPIO_ACTIVE_LOW>,
++			      <&gpio4 RK_PD3 GPIO_ACTIVE_LOW>;
++	};
+ };
+ 
+-/* Release both Genesys hub resets before U-Boot performs its USB scan. */
++/* Route both Genesys hub reset pins to GPIO; board code provides the pulse. */
+ &gpio4 {
+ 	u-boot,dm-pre-reloc;
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&usb_hub_reset_pins>;
+-
+-	usb-hub1-enable-hog {
+-		u-boot,dm-pre-reloc;
+-		gpio-hog;
+-		gpios = <RK_PD2 GPIO_ACTIVE_HIGH>;
+-		output-high;
+-		line-name = "usb-hub1-enable";
+-	};
+-
+-	usb-hub2-enable-hog {
+-		u-boot,dm-pre-reloc;
+-		gpio-hog;
+-		gpios = <RK_PD3 GPIO_ACTIVE_HIGH>;
+-		output-high;
+-		line-name = "usb-hub2-enable";
+-	};
+ };
+ 
+ &pinctrl {
+diff --git a/board/rockchip/evb_rk3588/evb_rk3588.c b/board/rockchip/evb_rk3588/evb_rk3588.c
+index eaa416c..1ec066b 100644
+--- a/board/rockchip/evb_rk3588/evb_rk3588.c
++++ b/board/rockchip/evb_rk3588/evb_rk3588.c
+@@ -12,6 +12,9 @@
+ #include <rockusb.h>
+ #include <adc.h>
+ #include <dm.h>
++#include <dm/ofnode.h>
++#include <asm/gpio.h>
++#include <linux/libfdt.h>
+ 
+ #define SARADC_ADDR	"saradc@fec10000"
+ #define HW_ID_CHANNEL	5
+@@ -30,6 +33,69 @@ struct variant_def {
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
++/*
++ * The two Genesys hubs on MB0002 V2 share power with the SoC and require a
++ * real reset pulse after the GPIO mux is available.  Merely holding reset
++ * deasserted can leave the hub on USB3DRD1 negotiating as a full-speed device,
++ * after which xHCI cannot complete Address Device.
++ */
++static int agibot_usb_hub_reset(void)
++{
++	struct gpio_desc resets[2] = {};
++	ofnode node;
++	int count, i, node_offset, ret;
++
++	node_offset = fdt_node_offset_by_compatible(gd->fdt_blob, -1,
++				"agibot,mb0002-v2-usb-hub-reset");
++	if (node_offset < 0)
++		return node_offset;
++	node = offset_to_ofnode(node_offset);
++
++	/* GPIO_ACTIVE_LOW + OUT_ACTIVE asserts both resets while requesting. */
++	count = gpio_request_list_by_name_nodev(node, "reset-gpios", resets,
++						2, GPIOD_IS_OUT_ACTIVE);
++	if (count < 0)
++		return count;
++	if (count != ARRAY_SIZE(resets)) {
++		ret = -EINVAL;
++		goto release;
++	}
++
++	mdelay(100);
++	for (i = 0; i < count; i++) {
++		ret = dm_gpio_set_value(&resets[i], 0);
++		if (ret)
++			goto release;
++	}
++
++	/* Allow hub clocks and the upstream PHY connection to settle. */
++	mdelay(200);
++	printf("AGIBOT USB hubs: reset pulse complete\n");
++	return 0;
++
++release:
++	/* Never leave a successfully requested reset line asserted on error. */
++	for (i = 0; i < count; i++)
++		if (dm_gpio_is_valid(&resets[i]))
++			dm_gpio_set_value(&resets[i], 0);
++	return ret;
++}
++
++int rk_board_late_init(void)
++{
++	int ret;
++
++	if (!of_machine_is_compatible("rockchip,rk3588-agibot-mb0002-v2"))
++		return 0;
++
++	ret = agibot_usb_hub_reset();
++	if (ret)
++		printf("AGIBOT USB hubs: reset failed (%d)\n", ret);
++
++	/* Keep booting so serial/eMMC recovery remains available on GPIO errors. */
++	return 0;
++}
++
+ #ifdef CONFIG_USB_DWC3
+ #define CRU_BASE		0xfd7c0000
+ #define CRU_SOFTRST_CON42	0x0aa8
+diff --git a/drivers/phy/phy-rockchip-inno-usb2.c b/drivers/phy/phy-rockchip-inno-usb2.c
+index 2ab29da..1ee8a7d 100644
+--- a/drivers/phy/phy-rockchip-inno-usb2.c
++++ b/drivers/phy/phy-rockchip-inno-usb2.c
+@@ -1081,6 +1081,29 @@ static int rk3588_usb2phy_tuning(struct rockchip_usb2phy *rphy)
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * Match the RK3588 vendor PHY settings.  The OTG PHYs use the stronger
++	 * transmitter compensation values verified on MB0002 V2; host-only PHYs
++	 * retain the slightly lower transmitter resistance setting.
++	 */
++	if (rphy->phy_cfg->reg == 0x0000 ||
++	    rphy->phy_cfg->reg == 0x4000) {
++		ret = regmap_write(base, 0x000c,
++				   GENMASK(20, 16) | 0x0015);
++		if (ret)
++			return ret;
++
++		ret = regmap_write(base, 0x0010,
++				   GENMASK(17, 16) | 0x0003);
++		if (ret)
++			return ret;
++	} else {
++		ret = regmap_write(base, 0x000c,
++				   GENMASK(20, 16) | 0x0014);
++		if (ret)
++			return ret;
++	}
++
+ 	return 0;
+ }
+ 
+-- 
+2.53.0
+
