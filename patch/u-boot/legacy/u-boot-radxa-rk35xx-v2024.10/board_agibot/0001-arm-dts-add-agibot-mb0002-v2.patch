@@ -16,8 +16,8 @@ validated independently.
 
 Signed-off-by: Armbian AGIBOT bring-up <noreply@armbian.com>
 ---
- arch/arm/dts/rk3588-agibot-mb0002-v2.dts | 204 +++++++++++++++++++++++
- 1 file changed, 204 insertions(+)
+ arch/arm/dts/rk3588-agibot-mb0002-v2.dts | 229 +++++++++++++++++++++++
+ 1 file changed, 229 insertions(+)
  create mode 100644 arch/arm/dts/rk3588-agibot-mb0002-v2.dts
 
 diff --git a/arch/arm/dts/rk3588-agibot-mb0002-v2.dts b/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
@@ -25,7 +25,7 @@ new file mode 100644
 index 00000000000..75815a51911
 --- /dev/null
 +++ b/arch/arm/dts/rk3588-agibot-mb0002-v2.dts
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,229 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * U-Boot control device tree for AGIBOT MB0002 V2.
@@ -37,12 +37,37 @@ index 00000000000..75815a51911
 +
 +/dts-v1/;
 +#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
 +#include "rk3588.dtsi"
 +#include "rk3588-u-boot.dtsi"
 +
 +/ {
 +	model = "Rockchip RK3588 AGIBOT MB0002 V2 Board";
 +	compatible = "rockchip,rk3588-agibot-mb0002-v2", "rockchip,rk3588";
++
++	/*
++	 * Factory SW9200 loader key: SARADC channel 1, active near 0 V.
++	 *
++	 * Keep the bus and child in the final U-Boot DTB with dm-spl, but do
++	 * not bind the key during the pre-console dm-pre-reloc scan. Probing
++	 * the ADC key that early can stall RK3588 while its CRU/reset path is
++	 * not ready yet.
++	 */
++	adc-keys {
++		compatible = "adc-keys";
++		io-channels = <&saradc 1>;
++		io-channel-names = "buttons";
++		keyup-threshold-microvolt = <1800000>;
++		u-boot,dm-spl;
++		status = "okay";
++
++		loader-key {
++			u-boot,dm-spl;
++			linux,code = <KEY_VOLUMEUP>;
++			label = "SW9200 loader";
++			press-threshold-microvolt = <1750>;
++		};
++	};
 +
 +	chosen {
 +		stdout-path = "serial2:1500000n8";
@@ -226,9 +251,9 @@ index 00000000000..75815a51911
 +	status = "disabled";
 +};
 +
-+/* SW9200 support is deferred; do not probe the inherited ADC in U-Boot. */
++/* The download key is sampled by U-Boot proper after early DM init. */
 +&saradc {
-+	status = "disabled";
++	status = "okay";
 +};
 -- 
 2.43.0

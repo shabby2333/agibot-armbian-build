@@ -37,6 +37,10 @@ function post_family_config__agibot_mb0002_v2_board_overrides() {
 }
 
 function pre_install_distribution_specific__agibot_install_armbian_libmali() {
+	# The CLI server/minimal profiles intentionally omit the graphics stack and
+	# therefore do not provide libdrm2 at this early image stage.
+	[[ "${BUILD_DESKTOP}" == "yes" ]] || return 0
+
 	local package="libmali-valhall-g610-g24p0-x11-wayland-gbm_1.9-1_arm64.deb"
 	local release_tag="v1.9-1-20260304-9b413d2"
 	local expected_sha256="edc1d2e45b7e16f39e5608075b89e90bd62974257f15ac942f214bef522eb22c"
@@ -166,6 +170,8 @@ function post_family_tweaks__agibot_mali_dma_heap_permissions() {
 }
 
 function post_family_tweaks__agibot_mali_x11_kms_config() {
+	[[ "${BUILD_DESKTOP}" == "yes" ]] || return 0
+
 	display_alert "${BOARD}" "Configuring X11 for Rockchip KMS" "info"
 	install -d "${SDCARD}/etc/X11/xorg.conf.d"
 	printf '%s\n' \
@@ -179,6 +185,8 @@ function post_family_tweaks__agibot_mali_x11_kms_config() {
 }
 
 function post_family_tweaks__agibot_mali_egl_override() {
+	[[ "${BUILD_DESKTOP}" == "yes" ]] || return 0
+
 	display_alert "${BOARD}" "Selecting libmali EGL and GLES" "info"
 	local lib_dir="${SDCARD}/usr/lib/aarch64-linux-gnu"
 	local library
@@ -206,6 +214,8 @@ function post_family_tweaks__agibot_mali_egl_override() {
 }
 
 function post_family_tweaks__agibot_mali_gbm_fixup() {
+	[[ "${BUILD_DESKTOP}" == "yes" ]] || return 0
+
 	display_alert "${BOARD}" "Selecting the Mali GBM implementation" "info"
 	local lib_dir="${SDCARD}/usr/lib/aarch64-linux-gnu"
 
