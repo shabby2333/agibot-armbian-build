@@ -44,6 +44,7 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rockchip-rk3399-spi-spidev.dtbo \
 	rockchip-rk3399-uart4.dtbo \
 	rockchip-rk3399-w1-gpio.dtbo \
+	rk3562-kickpi-k3b-demo-dsi-panel.dtbo \
 	rockchip-rk3566-sata2.dtbo \
 	rockchip-rk3566-i2c2-m1.dtbo \
 	rockchip-rk3566-i2c3-m0.dtbo \
@@ -122,7 +123,8 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rockchip-rk3588-nanopc-t6-mmc-frequency.dtbo \
 	rockchip-rk3588-odroidm2-weather-board-zero.dtbo \
 	rockchip-rk3588-odroidm2-display-vu8s.dtbo \
-	rockchip-rk3588-orangepi-5-ap6275p.dtbo
+	rockchip-rk3588-orangepi-5-ap6275p.dtbo \
+	rockchip-rk3588-orangepi5-pro-restore-fan-param.dtbo
 
 scr-$(CONFIG_ARCH_ROCKCHIP) += \
        rockchip-fixup.scr

@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Ashish Arora <ashisharora.linux@outlook.com>
 Date: Sat, 8 Jan 2022 21:43:18 +1100
-Subject: drm/i915: Discard large BIOS framebuffers causing display corruption
+Subject: Re: [PATCH] drm/i915: Discard large BIOS framebuffers causing display
+ corruption.
 
 On certain 4k panels, the BIOS framebuffer is larger than what panel
 requires causing display corruption. Introduce a check for the same.
