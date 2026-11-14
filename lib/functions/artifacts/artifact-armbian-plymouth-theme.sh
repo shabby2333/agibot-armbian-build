@@ -22,7 +22,7 @@ function artifact_armbian-plymouth-theme_prepare_version() {
 
 	# get the hashes of the lib/ bash sources involved...
 	declare hash_files="undetermined"
-	calculate_hash_for_bash_deb_artifact "compilation/packages/armbian-plymouth-theme-deb.sh" "${SRC}/packages/plymouth-theme-armbian/armbian.plymouth"
+	calculate_hash_for_bash_deb_artifact "compilation/packages/armbian-plymouth-theme-deb.sh" "${SRC}/packages/plymouth-theme-armbian/armbian.plymouth" "${SRC}/packages/plymouth-theme-armbian/initramfs-hook"
 	declare bash_hash="${hash_files}"
 	declare bash_hash_short="${bash_hash:0:${short_hash_size}}"
 
@@ -62,7 +62,7 @@ function artifact_armbian-plymouth-theme_cli_adapter_config_prep() {
 }
 
 function artifact_armbian-plymouth-theme_get_default_oci_target() {
-	artifact_oci_target_base="${GHCR_SOURCE}/armbian/os/"
+	artifact_oci_target_base="${OCI_SERVER}/${OCI_PATH}/"
 }
 
 function artifact_armbian-plymouth-theme_is_available_in_local_cache() {

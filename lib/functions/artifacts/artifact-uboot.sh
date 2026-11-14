@@ -79,7 +79,7 @@ function artifact_uboot_prepare_version() {
 
 	# Hash the extension hooks
 	declare -a extension_hooks_to_hash=(
-		"post_uboot_custom_postprocess" "fetch_custom_uboot" "build_custom_uboot"
+		"post_uboot_custom_postprocess" "fetch_sources_tools" "fetch_custom_uboot" "build_custom_uboot"
 		"pre_config_uboot_target" "post_config_uboot_target" "pre_package_uboot_image"
 		"check_uboot_produced_binary_file"
 	)
@@ -87,13 +87,13 @@ function artifact_uboot_prepare_version() {
 	declare hash_hooks="undetermined"
 	hash_hooks="$(echo "${extension_hooks_hashed[@]}" | sha256sum | cut -d' ' -f1)"
 
-	# Hash the old-timey hooks and regular core functions (atf code, used by u-boot build process)
+	# Hash the old-timey hooks and regular core functions (atf and crust code, used by u-boot build process)
 	# calculate_hash_for_function_bodies skips functions that don't exist, so family-specific
 	# builders (e.g. K3's compile_k3_bootgen/optee, which are called from a hashed hook but whose
 	# bodies would otherwise not be hashed) can be listed here without affecting other families.
 	declare hash_functions="undetermined"
 	calculate_hash_for_function_bodies "uboot_custom_postprocess" "write_uboot_platform" "write_uboot_platform_mtd" \
-		"setup_write_uboot_platform" "compile_atf" \
+		"setup_write_uboot_platform" "compile_atf" "compile_crust" \
 		"compile_k3_bootgen" "compile_k3_optee"
 	declare hash_uboot_functions="${hash_functions}"
 
@@ -119,6 +119,12 @@ function artifact_uboot_prepare_version() {
 	# UBOOT_HASH_EXTRA when the blob changes to force a repackage. Appended ONLY when
 	# set, so boards that don't use it keep their exact previous version (no churn).
 	[[ -n "${UBOOT_HASH_EXTRA:-}" ]] && vars_to_hash+=("${UBOOT_HASH_EXTRA}")
+	# Disk roles the board's u-boot loads /boot from, shipped in platform_install.sh for armbian-install.
+	[[ -n "${BOOTLOADER_BOOTS_FROM:-}" ]] && vars_to_hash+=("${BOOTLOADER_BOOTS_FROM}")
+	# SPI images for armbian-install: default, and for a SATA install target.
+	[[ -n "${BOOTLOADER_MTD_IMAGE:-}" ]] && vars_to_hash+=("${BOOTLOADER_MTD_IMAGE}" "${BOOTLOADER_MTD_IMAGE_SATA:-}")
+	# Space reserved before the first partition, shipped as BOOTLOADER_RESERVED_MIB in platform_install.sh.
+	[[ -n "${OFFSET:-}" ]] && vars_to_hash+=("${OFFSET}")
 	declare hash_variables="undetermined" # will be set by calculate_hash_for_variables(), which normalizes the input
 	calculate_hash_for_variables "${vars_to_hash[@]}"
 	declare vars_config_hash="${hash_variables}"
@@ -134,7 +140,7 @@ function artifact_uboot_prepare_version() {
 	# that ships a prebuilt or externally-fetched u-boot blob just bumps that string
 	# to force a repackage — no filesystem read here (the blob may not exist yet at
 	# matrix-prep, and may not live in this repo at all).
-	artifact_version="${GIT_INFO_UBOOT[MAKEFILE_VERSION]}-S${short_sha1}-P${uboot_patches_hash_short}-H${hash_hooks_and_functions_short}-V${var_config_hash_short}-B${bash_hash_short}"
+	artifact_version="${GIT_INFO_UBOOT[MAKEFILE_VERSION]:-1}-S${short_sha1}-P${uboot_patches_hash_short}-H${hash_hooks_and_functions_short}-V${var_config_hash_short}-B${bash_hash_short}"
 
 	declare -a reasons=(
 		"version \"${GIT_INFO_UBOOT[MAKEFILE_FULL_VERSION]}\""
@@ -219,7 +225,7 @@ function artifact_uboot_cli_adapter_config_prep() {
 }
 
 function artifact_uboot_get_default_oci_target() {
-	artifact_oci_target_base="${GHCR_SOURCE}/armbian/os/"
+	artifact_oci_target_base="${OCI_SERVER}/${OCI_PATH}/"
 }
 
 function artifact_uboot_is_available_in_local_cache() {

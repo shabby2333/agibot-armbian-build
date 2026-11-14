@@ -1,5 +1,5 @@
 # Rockchip RK3588 SoC octa core 4-16GB eMMC USB3 NVMe SATA 4G WiFi/BT HDMI DP HDMI-In
-BOARD_NAME="Hinlink H88K"
+BOARD_NAME="H88K"
 BOARD_VENDOR="hinlink"
 BOARDFAMILY="rockchip-rk3588"
 BOARD_MAINTAINER=""
@@ -10,6 +10,7 @@ KERNEL_TARGET="vendor,edge"
 FULL_DESKTOP="yes"
 BOOT_LOGO="desktop"
 BOOT_FDT_FILE="rockchip/rk3588-hinlink-h88k.dtb"
+OVERLAY_PREFIX_BOARD="hinlink-h88k"
 BOOT_SCENARIO="spl-blobs"
 IMAGE_PARTITION_TABLE="gpt"
 declare -g UEFI_EDK2_BOARD_ID="h88k" # This _only_ used for uefi-edk2-rk3588 extension

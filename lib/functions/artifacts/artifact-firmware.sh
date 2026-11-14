@@ -16,9 +16,6 @@ function artifact_firmware_prepare_version() {
 	artifact_version="undetermined"        # outer scope
 	artifact_version_reason="undetermined" # outer scope
 
-	local ARMBIAN_FIRMWARE_SOURCE="${ARMBIAN_FIRMWARE_GIT_SOURCE:-"https://github.com/armbian/firmware"}"
-	local ARMBIAN_FIRMWARE_BRANCH="branch:${ARMBIAN_FIRMWARE_GIT_BRANCH:-"master"}"
-
 	debug_var ARMBIAN_FIRMWARE_SOURCE
 	debug_var ARMBIAN_FIRMWARE_BRANCH
 
@@ -77,7 +74,7 @@ function artifact_firmware_cli_adapter_config_prep() {
 }
 
 function artifact_firmware_get_default_oci_target() {
-	artifact_oci_target_base="${GHCR_SOURCE}/armbian/os/"
+	artifact_oci_target_base="${OCI_SERVER}/${OCI_PATH}/"
 }
 
 function artifact_firmware_is_available_in_local_cache() {

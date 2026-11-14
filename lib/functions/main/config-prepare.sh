@@ -347,6 +347,10 @@ function check_config_userspace_release_and_desktop() {
 			exit_with_target_not_supported_error "RELEASE '${RELEASE}' is not supported; there is no '${release_distro_dir}' directory."
 		fi
 
+		if [[ "$(cat "${release_distro_dir}/support" 2> /dev/null)" == "eos" ]]; then
+			exit_with_target_not_supported_error "RELEASE '${RELEASE}' is end of life (eos); the build framework no longer builds it."
+		fi
+
 		if [[ ! -f "${release_distro_arches_file}" ]]; then
 			exit_with_target_not_supported_error "RELEASE '${RELEASE}' does not have file ${release_distro_arches_file}"
 		fi
@@ -374,9 +378,6 @@ function check_config_userspace_release_and_desktop() {
 
 function fix_userspace_packages_release_and_distro() {
 	display_alert "fix_userspace_packages_release_and_distro" "For distro '${DISTRIBUTION}' release '${RELEASE}'" "debug"
-
-	# Some old hack from the past, not sure if it's still needed. Originally from https://github.com/armbian/build/pull/5881
-	if [[ $RELEASE == trixie || $ARCH == riscv64 ]]; then remove_packages "cpufrequtils"; fi # this will remove from rootfs as well
 
 	# Debian: no need for this package in the rootfs, as it provides add-apt-repository which is not used on our Debian builds
 	if [[ "${DISTRIBUTION}" == "Debian" ]]; then

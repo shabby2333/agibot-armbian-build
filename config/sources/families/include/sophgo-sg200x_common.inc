@@ -23,12 +23,12 @@ declare -g SERIALCON="ttyS0"
 case "${BRANCH}" in
 
 	edge)
-		declare -g KERNEL_MAJOR_MINOR="7.2"
+		declare -g KERNEL_MAJOR_MINOR="7.3"
 		declare -g LINUXCONFIG="linux-${LINUXFAMILY}-edge"
 		;;
 
 	bleedingedge)
-		declare -g KERNEL_MAJOR_MINOR="7.3"
+		declare -g KERNEL_MAJOR_MINOR="7.4"
 		declare -g LINUXCONFIG="linux-${LINUXFAMILY}-bleedingedge"
 		;;
 
@@ -43,7 +43,7 @@ declare -g KERNELPATCHDIR="archive/sophgo-sg200x-${KERNEL_MAJOR_MINOR}" # Don't 
 # Wi-Fi comes from the sophgo-sg200x-aic8800 extension.
 declare -g EXTRAWIFI="no"
 
-declare -g OVERLAY_PREFIX="sg2000"
+declare -g OVERLAY_PREFIX="${OVERLAY_PREFIX:-"sg2000"}"
 
 # ---------------------------------------------------------------------------
 # Bootloader sources
@@ -561,22 +561,6 @@ function post_family_tweaks_bsp__sophgo_sg200x_emmc_install_tool() {
 	run_host_command_logged install -m 0755 \
 		"${SRC}/packages/bsp/sophgo-sg200x/usr/sbin/sophgo-emmc-install" \
 		"${destination}/usr/sbin/sophgo-emmc-install"
-}
-
-# Nothing gives the SG200x ethernet a MAC address, so derive one from the chip's
-# efuse serial. Shared with the wifi side, whose udev rule
-# extensions/sophgo-sg200x-aic8800.sh installs.
-function post_family_tweaks_bsp__sophgo_sg200x_stable_mac() {
-	display_alert "Sophgo SG200x" "installing stable MAC address helper" "info"
-
-	run_host_command_logged install -d -m 0755 "${destination}/lib/udev" \
-		"${destination}/etc/udev/rules.d"
-	run_host_command_logged install -m 0755 \
-		"${SRC}/packages/bsp/sophgo-sg200x/lib/udev/sg200x-stable-mac" \
-		"${destination}/lib/udev/sg200x-stable-mac"
-	run_host_command_logged install -m 0644 \
-		"${SRC}/packages/bsp/sophgo-sg200x/etc/udev/rules.d/70-sg200x-stable-mac.rules" \
-		"${destination}/etc/udev/rules.d/70-sg200x-stable-mac.rules"
 }
 
 # The userspace half of the "usb-device" overlay, installed on every image; it is

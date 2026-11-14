@@ -181,7 +181,7 @@ function do_main_configuration() {
 		if [[ -z $CRYPTROOT_PASSPHRASE ]] && [[ -z $CRYPTROOT_AUTOUNLOCK ]]; then # a passphrase is mandatory if rootfs encryption is enabled, unless CRYPTROOT_AUTOUNLOCK is wanted
 			exit_with_error "Root encryption is enabled but CRYPTROOT_PASSPHRASE or CRYPTROOT_AUTOUNLOCK is not set"
 		fi
-		[[ -z $CRYPTROOT_MAPPER ]] && CRYPTROOT_MAPPER="armbian-root" # TODO: fixed name can't be used for parallel image building (rpardini: ?)
+		[[ -z $CRYPTROOT_MAPPER ]] && CRYPTROOT_MAPPER="armbian-root" # Global to the host: parallel builds wait for it
 		[[ -z $CRYPTROOT_SSH_UNLOCK ]] && CRYPTROOT_SSH_UNLOCK=yes
 		[[ -z $CRYPTROOT_SSH_UNLOCK_PORT ]] && CRYPTROOT_SSH_UNLOCK_PORT=2022
 		# Default to pdkdf2, this used to be the default with cryptroot <= 2.0, however
@@ -235,6 +235,12 @@ function do_main_configuration() {
 			declare -g -r MAINLINE_KERNEL_SOURCE='https://mirrors.bfsu.edu.cn/git/linux-stable.git'
 			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://mirrors.bfsu.edu.cn/git/linux-firmware.git'
 			;;
+		github)
+			# Armbian's own mirror of the kernel.org stable tree (all branches + tags,
+			# synced every 30 min). Firmware stays on kernel.org.
+			declare -g -r MAINLINE_KERNEL_SOURCE='https://github.com/armbian/linux.git'
+			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git'
+			;;
 		gitverse)
 			declare -g -r MAINLINE_KERNEL_SOURCE='https://gitverse.ru/pbs-sunflower/linux-stable.git'
 			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://gitverse.ru/pbs-sunflower/linux-firmware.git'
@@ -244,6 +250,14 @@ function do_main_configuration() {
 			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git'
 			;;
 	esac
+
+	# Mainline firmware git ref. Empty: use the newest linux-firmware release tag (mainline_firmware_resolve_git_ref).
+	# Set it to pin a version, for example "tag:20260916" or "commit:<sha1>"; "branch:main" follows upstream daily.
+	declare -g MAINLINE_FIRMWARE_BRANCH="${MAINLINE_FIRMWARE_BRANCH:-}"
+
+	# Armbian firmware. Also read the old names ARMBIAN_FIRMWARE_GIT_SOURCE and ARMBIAN_FIRMWARE_GIT_BRANCH (plain branch name).
+	declare -g -r ARMBIAN_FIRMWARE_SOURCE="${ARMBIAN_FIRMWARE_SOURCE:-${ARMBIAN_FIRMWARE_GIT_SOURCE:-"https://github.com/armbian/firmware"}}"
+	declare -g -r ARMBIAN_FIRMWARE_BRANCH="${ARMBIAN_FIRMWARE_BRANCH:-"branch:${ARMBIAN_FIRMWARE_GIT_BRANCH:-master}"}"
 
 	[[ $USE_GITHUB_UBOOT_MIRROR == yes ]] && UBOOT_MIRROR=github # legacy compatibility?
 
@@ -279,26 +293,36 @@ function do_main_configuration() {
 		gitee)
 			declare -g -r MAINLINE_UBOOT_SOURCE='https://gitee.com/mirrors/u-boot.git'
 			;;
-		denx)
-			declare -g -r MAINLINE_UBOOT_SOURCE='https://source.denx.de/u-boot/u-boot.git'
+		denx) # official upstream; source.denx.de redirects there
+			declare -g -r MAINLINE_UBOOT_SOURCE='https://git.u-boot-project.org/u-boot/u-boot.git'
 			;;
 		*)
 			declare -g -r MAINLINE_UBOOT_SOURCE="${GITHUB_SOURCE}/u-boot/u-boot"
 			;;
 	esac
 
+	# OCI storage for artifacts (OCI_PATH) and git trees (OCI_GIT_PATH).
+	declare -g OCI_SERVER="${OCI_SERVER:-"ghcr.io"}"
+	declare -g OCI_PATH="${OCI_PATH:-"armbian/os"}"
+	declare -g OCI_GIT_PATH="${OCI_GIT_PATH:-"armbian/shallow"}"
+
+	# OCI_PROXY: optional read-only cache of OCI_SERVER (host[:port]). Never used for uploads.
+	# GHCR_MIRROR selects a public ghcr.io mirror as OCI_PROXY.
 	case $GHCR_MIRROR in
 		dockerproxy)
-			GHCR_MIRROR_ADDRESS="${GHCR_MIRROR_ADDRESS:-"ghcr.dockerproxy.net"}"
-			declare -g -r GHCR_SOURCE=$GHCR_MIRROR_ADDRESS
+			OCI_PROXY="${OCI_PROXY:-"${GHCR_MIRROR_ADDRESS:-"ghcr.dockerproxy.net"}"}"
 			;;
 		nju)
-			declare -g -r GHCR_SOURCE='ghcr.nju.edu.cn'
-			;;
-		*)
-			declare -g -r GHCR_SOURCE='ghcr.io'
+			OCI_PROXY="${OCI_PROXY:-"ghcr.nju.edu.cn"}"
 			;;
 	esac
+	declare -g OCI_PROXY="${OCI_PROXY:-}"
+
+	# Deprecated overrides: OCI_TARGET_BASE, GIT_ORAS_TARBALLS_SHALLOW_BASE_REF.
+	declare -g GIT_ORAS_TARBALLS_SHALLOW_BASE_REF="${GIT_ORAS_TARBALLS_SHALLOW_BASE_REF:-"${OCI_SERVER}/${OCI_GIT_PATH}"}"
+
+	# Deprecated. Kept for extensions and userpatches.
+	declare -g -r GHCR_SOURCE="${OCI_PROXY:-"${OCI_SERVER}"}"
 
 	# Let's set default data if not defined in board configuration above
 	[[ -z $OFFSET ]] && OFFSET=4 # offset to 1st partition (we use 4MiB boundaries by default)
@@ -323,6 +347,21 @@ function do_main_configuration() {
 	if [[ "$HAS_VIDEO_OUTPUT" == "no" ]]; then
 		PLYMOUTH="no"
 		[[ $BUILD_DESKTOP != "no" ]] && exit_with_error "HAS_VIDEO_OUTPUT is set to no. So we shouldn't build desktop environment"
+	fi
+
+	# Kernel security fixes that stable does not carry yet, from armbian/cve. Off until proven reliable; KERNEL_CVE_PATCHES=yes enables them.
+	# Only for stable kernels of the series that armbian/cve publishes. Vendor trees (KERNELSOURCE set by the family) do not match.
+	# Other kernels do not load the extension, so their version does not change.
+	declare -g KERNEL_CVE_PATCHES="${KERNEL_CVE_PATCHES:-"no"}"
+	declare -g KERNEL_CVE_SERIES="${KERNEL_CVE_SERIES:-"6.18 7.3"}"
+	if [[ "${KERNEL_CVE_PATCHES}" == "yes" ]]; then
+		if [[ " ${KERNEL_CVE_SERIES} " != *" ${KERNEL_MAJOR_MINOR} "* ]]; then
+			display_alert "Kernel CVE fixes" "no CVE patches for kernel ${KERNEL_MAJOR_MINOR:-"unknown"}, only for ${KERNEL_CVE_SERIES}" "wrn"
+		elif [[ -n "${KERNELSOURCE}" && "${KERNELSOURCE}" != "${MAINLINE_KERNEL_SOURCE}" ]]; then
+			display_alert "Kernel CVE fixes" "no CVE patches for vendor kernel ${KERNELSOURCE}" "wrn"
+		else
+			enable_extension "kernel-cve-patches"
+		fi
 	fi
 
 	# Make NETWORKING_STACK read-only, as further changes would make the whole thing inconsistent.
@@ -351,10 +390,6 @@ function do_main_configuration() {
 			;;
 	esac
 
-	# enable APA extension for Debian Unstable release
-	# loong64 is not supported now
-	#  [ "$RELEASE" = "sid" ] && [ "$ARCH" != "loong64" ] && enable_extension "apa"
-
 	## Extensions: at this point we've sourced all the config files that will be used,
 	##             and (hopefully) not yet invoked any extension methods. So this is the perfect
 	##             place to initialize the extension manager. It will create functions
@@ -379,6 +414,13 @@ function do_main_configuration() {
 	POST_FAMILY_CONFIG_PER_BRANCH
 	track_general_config_variables "after post_family_config_branch hooks"
 
+	# Put the board overlay prefixes (OVERLAY_PREFIX_BOARD) before the family prefixes.
+	# A prefix that matches no overlay in the kernel of the current BRANCH does no harm.
+	if [[ -n "${OVERLAY_PREFIX_BOARD}" ]]; then
+		declare -g OVERLAY_PREFIX="${OVERLAY_PREFIX_BOARD}${OVERLAY_PREFIX:+ ${OVERLAY_PREFIX}}"
+		display_alert "Overlay prefixes" "OVERLAY_PREFIX='${OVERLAY_PREFIX}'" "debug"
+	fi
+
 	# Lets make some variables readonly.
 	# We don't want anything changing them, it's exclusively for family config.
 	declare -g -r PACKAGE_LIST_FAMILY="${PACKAGE_LIST_FAMILY}"
@@ -394,7 +436,7 @@ function do_extra_configuration() {
 	[[ -z $BOOTPATCHDIR ]] && BOOTPATCHDIR="u-boot-$LINUXFAMILY" # @TODO move to hook
 	[[ -z $ATFPATCHDIR ]] && ATFPATCHDIR="atf-$LINUXFAMILY"
 
-	if [[ "$RELEASE" =~ ^(focal|jammy|noble|oracular|plucky|questing|resolute)$ ]]; then
+	if [[ "$RELEASE" =~ ^(noble|resolute)$ ]]; then
 		DISTRIBUTION="Ubuntu"
 	else
 		DISTRIBUTION="Debian"
@@ -442,15 +484,10 @@ function do_extra_configuration() {
 	# Control aria2c's usage of ipv6.
 	[[ -z $DISABLE_IPV6 ]] && DISABLE_IPV6="true"
 
-	# @TODO this is _very legacy_ and should be removed. Old-time users might have a lib.config lying around and it will mess up things.
-	# For (late) user override.
-	# Notice: it is too late to define hook functions or add extensions in lib.config, since the extension initialization already ran by now.
-	#         in case the user tries to use them in lib.config, hopefully they'll be detected as "wishful hooking" and the user will be wrn'ed.
+	# lib.config was soft-deprecated with the next-gen framework. Its documentation was removed over a year ago.
+	# @TODO: remove this check end of 2027.
 	if [[ -f $USERPATCHES_PATH/lib.config ]]; then
-		display_alert "Using user configuration override" "$USERPATCHES_PATH/lib.config" "info"
-		# shellcheck source=/dev/null
-		source "$USERPATCHES_PATH"/lib.config
-		track_general_config_variables "after sourcing lib.config"
+		exit_with_error "lib.config is not supported anymore." "Remove ${USERPATCHES_PATH}/lib.config. Use https://docs.armbian.com/build-framework/user-configurations/ instead."
 	fi
 
 	# Prepare array for extensions to fill in.
@@ -460,8 +497,6 @@ function do_extra_configuration() {
 	call_extension_method "user_config" <<- 'USER_CONFIG'
 		*Invoke function with user override*
 		Allows for overriding configuration values set anywhere else.
-		It is called after sourcing the `lib.config` file if it exists,
-		but before assembling any package lists.
 	USER_CONFIG
 	track_general_config_variables "after user_config hooks"
 
@@ -487,7 +522,27 @@ function do_extra_configuration() {
 		APT_PROXY_ADDR="$(echo "${http_proxy:-${https_proxy:-${HTTP_PROXY:-${HTTPS_PROXY:-}}}}" | sed -E 's|https?://([^/]+).*|\1|')"
 		display_alert "Derived APT proxy address from proxy env vars" "${APT_PROXY_ADDR##*@}" "info"
 	fi
-	[[ -n "${APT_PROXY_ADDR}" ]] && display_alert "Using custom apt proxy address" "APT_PROXY_ADDR=${APT_PROXY_ADDR##*@}" "info"
+	# Unreachable proxy: download direct instead of failing every apt call.
+	# Not with MANAGE_ACNG=yes: that cache starts later, in prepare_host.
+	if [[ -n "${APT_PROXY_ADDR}" && "${MANAGE_ACNG}" != "yes" ]]; then
+		# apt gets http://${APT_PROXY_ADDR}: no port means 80. Probe the same port.
+		declare apt_proxy="${APT_PROXY_ADDR##*@}" apt_proxy_host="${APT_PROXY_ADDR##*@}" apt_proxy_port=80
+		if [[ "${apt_proxy}" =~ ^(.+):([0-9]+)$ ]]; then
+			apt_proxy_host="${BASH_REMATCH[1]}" apt_proxy_port="${BASH_REMATCH[2]}"
+		fi
+		apt_proxy_host="${apt_proxy_host#[}" apt_proxy_host="${apt_proxy_host%]}" # IPv6 [addr]
+		if timeout 2 bash -c "exec 3<>/dev/tcp/${apt_proxy_host}/${apt_proxy_port}" 2> /dev/null; then
+			display_alert "Using custom apt proxy address" "APT_PROXY_ADDR=${apt_proxy}" "info"
+		else
+			display_alert "Apt proxy unreachable, downloading direct" "${apt_proxy}" "wrn"
+			APT_PROXY_ADDR=""
+			# apt also reads these. Drop the ones that point to this proxy.
+			declare v
+			for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; do
+				[[ "${!v:-}" =~ [/@]"${apt_proxy}"([:/]|$) ]] && unset "${v}"
+			done
+		fi
+	fi
 
 	# @TODO: allow to run aggregation, for CONFIG_DEFS_ONLY? rootfs_aggregate_packages
 

@@ -192,10 +192,6 @@ function compile_armbian-bsp-cli() {
 	# TODO: Add proper handling for updated conffiles
 	# We are runing this script each time apt runs. If this package is removed, file is removed and error is triggered.
 	# Keeping armbian-apt-updates as a configuration, solve the problem
-	cat <<- EOF > "${destination}"/DEBIAN/conffiles
-		/usr/lib/armbian/armbian-apt-updates
-		/etc/X11/xorg.conf.d/01-armbian-defaults.conf
-	EOF
 
 	# trigger uInitrd creation after installation, to apply
 	# /etc/initramfs/post-update.d/99-uboot
@@ -225,6 +221,27 @@ function compile_armbian-bsp-cli() {
 		You can also append to the `preinst_functions`, `postinst_functions` and `postrm` array, and the _content_
 		of those functions will be added to the preinst, postinst and postrm scripts respectively.
 	POST_FAMILY_TWEAKS_BSP
+
+	# Conffiles, after the hooks: family_tweaks_bsp, post_family_tweaks_bsp and the
+	# extensions all write to $destination, so the tree is only final here.
+	#
+	# List a path only when the package really contains it. Extensions strip BSP
+	# files on purpose -- a cloud image has no use for the apt periodic config, for
+	# instance -- and the framework cannot know which. A listed path that is not in
+	# the tree makes dpkg-deb refuse: "does not appear in package".
+	declare -a bsp_conffile_candidates=(
+		"/usr/lib/armbian/armbian-apt-updates"
+		"/etc/X11/xorg.conf.d/01-armbian-defaults.conf"
+	)
+	declare bsp_conffile
+	: > "${destination}"/DEBIAN/conffiles
+	for bsp_conffile in "${bsp_conffile_candidates[@]}"; do
+		if [[ -f "${destination}${bsp_conffile}" ]]; then
+			echo "${bsp_conffile}" >> "${destination}"/DEBIAN/conffiles
+		else
+			display_alert "Not shipping conffile, removed from the BSP" "${bsp_conffile}" "debug"
+		fi
+	done
 
 	# Render the postinst/postrm/etc
 	# set up pre install script; use inline functions
@@ -280,15 +297,12 @@ function reversion_armbian-bsp-cli_deb_contents() {
 	if [[ "${KEEP_ORIGINAL_OS_RELEASE:-"no"}" == "yes" ]]; then
 		depends_base_files=""
 	fi
-	# Provides/Conflicts/Replaces linux-sysctl-defaults: the BSP ships
-	# /usr/lib/sysctl.d/50-default.conf itself (armbian's copy of the distro
-	# defaults), so it satisfies that dependency without pulling the external
-	# package, and cleanly takes over its file if it was ever installed.
+	# The BSP ships 55-bsp-default.conf after the distro defaults.
+	# It provides linux-sysctl-defaults without replacing the distro package.
 	cat <<- EOF >> "${control_file_new}"
 		Depends: bash, linux-base, u-boot-tools, initramfs-tools, lsb-release, fping, device-tree-compiler${depends_base_files}${EXTRA_BSPDEPS:+, ${EXTRA_BSPDEPS}}
-		Replaces: zram-config, linux-sysctl-defaults, armbian-bsp-cli-${BOARD}${EXTRA_BSP_NAME} (<< ${REVISION})
+		Replaces: zram-config, armbian-bsp-cli-${BOARD}${EXTRA_BSP_NAME} (<< ${REVISION})
 		Breaks: armbian-bsp-cli-${BOARD}${EXTRA_BSP_NAME} (<< ${REVISION})
-		Conflicts: linux-sysctl-defaults
 		Provides: armbian-bsp-cli, linux-sysctl-defaults
 	EOF
 
@@ -299,6 +313,11 @@ function reversion_armbian-bsp-cli_deb_contents() {
 		VERSION=${REVISION}
 		REVISION=$REVISION
 	EOF
+	if [[ -f "${control_dir}/md5sums" ]]; then
+		local release_checksum
+		release_checksum=$(md5sum "${data_dir}/etc/armbian-release")
+		sed -i "s|^[[:xdigit:]]\{32\}  etc/armbian-release$|${release_checksum%% *}  etc/armbian-release|" "${control_dir}/md5sums"
+	fi
 
 	# Show results if debugging
 	if [[ "${SHOW_DEBUG}" == "yes" ]]; then
@@ -383,18 +402,11 @@ function board_side_bsp_cli_preinst() {
 	# fixing ramdisk corruption when using lz4 compression method
 	sed -i "s/^COMPRESS=.*/COMPRESS=gzip/" /etc/initramfs-tools/initramfs.conf
 
-	# swap
-	grep -q vm.swappiness /etc/sysctl.conf
-	case $? in
-		0)
-			sed -i 's/vm\.swappiness.*/vm.swappiness=100/' /etc/sysctl.conf
-			;;
-		*)
-			echo vm.swappiness=100 >> /etc/sysctl.conf
-			;;
-	esac
+	# Older BSP versions forced swappiness here. /etc/sysctl.conf is applied last and
+	# overrides the tuning profile, so remove that line. 55-bsp-default.conf has the fallback.
+	[[ -f /etc/sysctl.conf ]] && sed -i '/^[[:space:]]*vm\.swappiness[[:space:]]*=[[:space:]]*100[[:space:]]*$/d' /etc/sysctl.conf
 	# --system (not -p) so the change to /etc/sysctl.conf above *and* the
-	# drop-ins under /usr/lib/sysctl.d (our 50-default.conf) are applied on
+	# drop-ins under /usr/lib/sysctl.d (our 55-bsp-default.conf) are applied on
 	# upgrade; -p reads only /etc/sysctl.conf and would leave them to next boot.
 	sysctl --system > /dev/null 2>&1
 	# replace canonical advertisement
@@ -412,6 +424,7 @@ function board_side_bsp_cli_preinst() {
 	[[ -f "/etc/update-motd.d/10-header" ]] && rm /etc/update-motd.d/10-header
 	[[ -f "/etc/update-motd.d/30-sysinfo" ]] && rm /etc/update-motd.d/30-sysinfo
 	[[ -f "/etc/update-motd.d/35-tips" ]] && rm /etc/update-motd.d/35-tips
+	[[ -f "/etc/update-motd.d/quotes.txt" ]] && rm /etc/update-motd.d/quotes.txt
 	[[ -f "/etc/update-motd.d/40-updates" ]] && rm /etc/update-motd.d/40-updates
 	[[ -f "/etc/update-motd.d/98-autoreboot-warn" ]] && rm /etc/update-motd.d/98-autoreboot-warn
 	[[ -f "/etc/update-motd.d/99-point-to-faq" ]] && rm /etc/update-motd.d/99-point-to-faq
@@ -419,6 +432,24 @@ function board_side_bsp_cli_preinst() {
 	[[ -f "/etc/update-motd.d/80-livepatch" ]] && rm /etc/update-motd.d/80-livepatch
 	[[ -f "/etc/apt/apt.conf.d/02compress-indexes" ]] && rm /etc/apt/apt.conf.d/02compress-indexes
 	[[ -f "/etc/apt/apt.conf.d/02periodic" ]] && rm /etc/apt/apt.conf.d/02periodic
+	# automatic-update policy now lives only in armbian-config. Migrate systems off
+	# the BSP's periodic config, once: only while 02-armbian-periodic is still present.
+	# It set APT::Periodic::Enable "0", the master off-switch; with it gone,
+	# apt.systemd.daily defaults Enable to 1. So read the effective value BEFORE
+	# removing it (apt-config reads merged config, so a commented setting cannot count),
+	# then drop the stock unattended-upgrades trigger unless updates are enabled.
+	# armbian-config writes APT::Periodic::Enable "1" when a user opts in, so that case
+	# is preserved. Gating on the file means a later dpkg-reconfigure is left untouched.
+	if [[ -f "/etc/apt/apt.conf.d/02-armbian-periodic" ]]; then
+		if [[ "$(apt-config dump --format '%v%n' APT::Periodic::Enable 2>/dev/null)" != "1" ]]; then
+			# clear the debconf answer too, so a later unattended-upgrades postinst
+			# cannot recreate 20auto-upgrades with updates on
+			command -v debconf-set-selections >/dev/null 2>&1 && \
+				echo "unattended-upgrades unattended-upgrades/enable_auto_updates boolean false" | debconf-set-selections
+			rm -f /etc/apt/apt.conf.d/20auto-upgrades
+		fi
+		rm /etc/apt/apt.conf.d/02-armbian-periodic
+	fi
 	[[ -f "/etc/apt/apt.conf.d/no-languages" ]] && rm /etc/apt/apt.conf.d/no-languages
 	[[ -f "/etc/init.d/armhwinfo" ]] && rm /etc/init.d/armhwinfo
 	[[ -f "/etc/logrotate.d/armhwinfo" ]] && rm /etc/logrotate.d/armhwinfo
@@ -482,6 +513,22 @@ function board_side_bsp_cli_postinst_finish() {
 	fi
 	if [[ ! -f "/etc/default/armbian-firstrun" ]]; then
 		mv /etc/default/armbian-firstrun.dpkg-dist /etc/default/armbian-firstrun
+	fi
+	# Groups that every new normal user joins: hardware and desktop access.
+	# armbian-firstlogin adds the first user to these and to the admin groups.
+	armbian_user_groups="audio video plugdev input dialout netdev bluetooth render users games i2c gpio spi"
+	# Create missing groups. This changes no user. udev rules use i2c, gpio and spi.
+	for group in ${armbian_user_groups} docker; do
+		getent group "${group}" > /dev/null || groupadd --system "${group}" || echo "Warning: Failed to create group ${group}" >&2
+	done
+	# First install only (also the image build): adduser adds new normal users to these groups.
+	# Not GROUPS= in /etc/default/useradd: useradd also applies it to system accounts.
+	# Upgrades keep the local defaults and the groups of existing users.
+	if [[ -z "$2" ]]; then
+		if [[ -f /etc/adduser.conf ]]; then
+			sed -i -e '/^#\?ADD_EXTRA_GROUPS=/d' -e '/^#\?EXTRA_GROUPS=/d' /etc/adduser.conf
+			printf 'ADD_EXTRA_GROUPS=1\nEXTRA_GROUPS="%s"\n' "${armbian_user_groups}" >> /etc/adduser.conf
+		fi
 	fi
 
 	# Reload services

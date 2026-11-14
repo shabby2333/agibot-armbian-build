@@ -7,7 +7,26 @@
 # This file is a part of the Armbian Build Framework
 # https://github.com/armbian/build/
 
+# Terminals bring their own terminfo, for example xterm-ghostty. The build host
+# or the Docker image may not have it, and tput, clear and dialog fail.
+# Use a known entry: the name without "xterm-" (ncurses ships "ghostty"),
+# else a generic one.
+function ensure_known_terminal() {
+	[[ -n "${TERM:-}" ]] || return 0
+	tput -T "${TERM}" longname &> /dev/null && return 0
+	declare term
+	for term in "${TERM#xterm-}" xterm-256color xterm dumb; do
+		if tput -T "${term}" longname &> /dev/null; then
+			export TERM="${term}"
+			return 0
+		fi
+	done
+	return 0 # no tput or no entry: keep TERM, the Docker image may know it
+}
+
 function cli_entrypoint() {
+	ensure_known_terminal # before tput reads the terminal width
+
 	# array, readonly, global, for future reference, "exported" to shutup shellcheck
 	declare -rg -x -a ARMBIAN_ORIGINAL_ARGV=("${@}")
 
@@ -43,6 +62,7 @@ function cli_entrypoint() {
 	# Now load the key=value pairs from cmdline into environment, before loading config or executing commands.
 	# This will be done _again_ later, to make sure cmdline params override config et al.
 	apply_cmdline_params_to_env "early" # which uses ARMBIAN_PARSED_CMDLINE_PARAMS
+	ensure_known_terminal              # the command line can set TERM
 	# From here on, no more ${1} or stuff. We've parsed it all into ARMBIAN_PARSED_CMDLINE_PARAMS or ARMBIAN_NON_PARAM_ARGS and ARMBIAN_COMMAND.
 
 	# Normalize renamed switches now, while the command line is all we have.
@@ -54,6 +74,11 @@ function cli_entrypoint() {
 
 	# Re-initialize logging, to take into account the new environment after parsing cmdline params.
 	logging_init
+
+	# USERPATCHES_PATH is the userpatches dir. read-only. This is the single definition; everything else uses the variable.
+	# Done after the early cmdline params (which might carry an USERPATCHES_PATH=xx to point it elsewhere), but before the
+	# arguments loop below, which looks for config files in it. The default directory is created further down, if missing.
+	cli_determine_userpatches_path
 
 	declare -a -g ARMBIAN_CONFIG_FILES=()                                            # fully validated, complete paths to config files.
 	declare -g ARMBIAN_COMMAND_HANDLER="" ARMBIAN_COMMAND="" ARMBIAN_COMMAND_VARS="" # only valid command and handler will ever be set here.
@@ -131,8 +156,8 @@ function cli_entrypoint() {
 	# Also form here, UUID will be generated, output created, logging enabled, etc.
 
 	# Init basic dirs.
-	declare -g -r DEST="${SRC}/output" USERPATCHES_PATH="${SRC}"/userpatches # DEST is the main output dir, and USERPATCHES_PATH is the userpatches dir. read-only.
-	mkdir -p "${DEST}" "${USERPATCHES_PATH}"                                 # Create output and userpatches directory if not already there
+	declare -g -r DEST="${SRC}/output"       # DEST is the main output dir. read-only. (USERPATCHES_PATH is defined further up)
+	mkdir -p "${DEST}" "${USERPATCHES_PATH}" # Create output and userpatches directory if not already there
 	display_alert "Output directory created! DEST:" "${DEST}" "debug"
 
 	# set unique mounting directory for this execution.
@@ -214,6 +239,7 @@ function cli_entrypoint() {
 		# Apply the params received from the command line _again_ after running the config.
 		# This ensures that params take precedence over stuff possibly defined in the config.
 		apply_cmdline_params_to_env "after config '${config_filename}'" # which uses ARMBIAN_PARSED_CMDLINE_PARAMS
+		ensure_known_terminal                                           # the config can set TERM
 	done
 
 	# Early check for deprecations

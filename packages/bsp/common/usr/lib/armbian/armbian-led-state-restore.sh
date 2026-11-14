@@ -16,6 +16,15 @@ REGEX_PARSE=$'(.*)=(.*)'
 
 LED=""
 
+# LED drivers built as modules can register after this service starts.
+# Wait for each saved LED, but no more than 10 seconds in total.
+WAIT_UNTIL=$((SECONDS + 10))
+wait_for_led() {
+	while [[ ! -d "$1" && $SECONDS -lt $WAIT_UNTIL ]]; do
+		sleep 0.2
+	done
+}
+
 if [[ ! -f $STATE_PATH ]]; then
 	echo "File $STATE_PATH not found, nothing to do"
 	exit 0
@@ -30,6 +39,7 @@ while read LINE; do
 	# When line matches the [...] style, assign the content as led base path
 	if [[ "$LINE" =~ $REGEX_EXTRACT ]]; then 
 		LED=${BASH_REMATCH[1]}
+		wait_for_led "$LED"
 		continue
 	fi
 
@@ -43,9 +53,15 @@ while read LINE; do
 	PARAM=${BASH_REMATCH[1]}
 	VALUE=${BASH_REMATCH[2]}
 
-	if [[ -z $PARAM || -z $VALUE ]]; then
+	if [[ -z $PARAM ]]; then
 		echo "Invalid state file, syntax error in configuration file "
 		exit 1
+	fi
+
+	# Older versions saved a parameter they could not read without a value
+	if [[ -z $VALUE ]]; then
+		echo "warning: $LED/$PARAM has no value, skipped"
+		continue
 	fi
 
 	# Ignore brightness=0 param, this will reset trigger to none

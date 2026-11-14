@@ -30,6 +30,9 @@ function cli_json_info_run() {
 
 		display_alert "Here we go" "generating JSON info :: ${ARMBIAN_COMMAND} " "info"
 
+		# The Python info tools, and the compile.sh children they spawn, have to look at the same userpatches directory we do.
+		export USERPATCHES_PATH
+
 		# Targets inventory. Will do all-by-all if no targets file is provided.
 		declare TARGETS_FILE="${TARGETS_FILE-"${USERPATCHES_PATH}/${TARGETS_FILENAME:-"targets.yaml"}"}"
 
@@ -157,10 +160,12 @@ function cli_json_info_run() {
 			display_alert "Generating targets inventory" "targets-compositor" "info"
 			export TARGETS_BETA="${BETA}"                             # Read by the Python script, and injected into every target as "BETA=" param.
 			export TARGETS_REVISION="${REVISION}"                     # Read by the Python script, and injected into every target as "REVISION=" param.
+			export TARGETS_KERNEL_CVE_PATCHES="${KERNEL_CVE_PATCHES:-}" # Read by the Python script, and injected into every target as "KERNEL_CVE_PATCHES=" param, if set.
 			export TARGETS_FILTER_INCLUDE="${TARGETS_FILTER_INCLUDE}" # Read by the Python script; used to "only include" targets that match the given string.
 			run_host_command_logged "${PYTHON3_VARS[@]}" "${PYTHON3_INFO[BIN]}" "${INFO_TOOLS_DIR}"/targets-compositor.py "${ALL_BOARDS_ALL_BRANCHES_INVENTORY_FILE}" "${ALL_USERSPACE_INVENTORY_FILE}" "${TARGETS_FILE}" ">" "${TARGETS_OUTPUT_FILE}"
 			unset TARGETS_BETA
 			unset TARGETS_REVISION
+			unset TARGETS_KERNEL_CVE_PATCHES
 			unset TARGETS_FILTER_INCLUDE
 		fi
 
@@ -299,6 +304,8 @@ function cli_json_info_run() {
 				# export env vars used by the Python script.
 				export SKIP_IMAGES="${SKIP_IMAGES:-"no"}"
 				export IMAGES_ONLY_OUTDATED_ARTIFACTS="${IMAGES_ONLY_OUTDATED_ARTIFACTS:-"no"}"
+				export MATRIX_ARTIFACT_CHUNKS # the images matrix shares the job outputs with the artifacts matrix
+				export MATRIX_IMAGE_OUTPUT_JOBS="${MATRIX_IMAGE_OUTPUT_JOBS:-"0"}"
 				run_host_command_logged "${PYTHON3_VARS[@]}" "${PYTHON3_INFO[BIN]}" "${INFO_TOOLS_DIR}"/output-gha-matrix.py images "${OUTDATED_ARTIFACTS_IMAGES_FILE}" "${MATRIX_IMAGE_CHUNKS}" ">" "${GHA_ALL_IMAGES_JSON_MATRIX_FILE}"
 			fi
 

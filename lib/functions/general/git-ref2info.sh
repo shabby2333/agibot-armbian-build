@@ -37,6 +37,7 @@ function git_remote_url_for_mirror() {
 # This works under memoize-cached.sh::run_memoized() -- which is full of tricks.
 # Nested functions are used because the source of the momoized function is used as part of the cache hash.
 function memoized_git_ref_to_info() {
+	# shellcheck disable=SC2178 # nope, that's a nameref.
 	declare -n MEMO_DICT="${1}" # nameref
 	declare ref_type ref_name
 	declare -a refs_to_try=()
@@ -73,11 +74,24 @@ function memoized_git_ref_to_info() {
 		fi
 	fi
 
+	# remote_sources[i] is a source as configured, remote_urls[i] the URL to contact for it.
+	declare -a remote_sources=() remote_urls=()
+	declare one_url i
+	while read -r one_url; do
+		remote_sources+=("${one_url}")
+		remote_urls+=("$(git_remote_url_for_mirror "${one_url}")")
+	done < <(git_remote_candidates "${MEMO_DICT[GIT_SOURCE]}" "${ref_type}")
+	# The Makefile is read from the source that answered.
+	declare answered_source="${MEMO_DICT[GIT_SOURCE]}"
+
 	# Tags: one ls-remote resolves annotated and lightweight tags alike; no try-list, no wasted round-trips.
 	# Guarded on the sha1 not being valid yet, so the OFFLINE_WORK pinned-sha1 above still wins.
 	if [[ "${ref_type}" == "tag" && ! "${sha1}" =~ ^[0-9a-f]{40}$ ]]; then
-		sha1="$(git_ls_remote_tag_commit_sha1 "$(git_remote_url_for_mirror "${MEMO_DICT[GIT_SOURCE]}")" "${ref_name}")"
-		display_alert "SHA1 of tag ${ref_name}" "'${sha1}'" "info"
+		read -r sha1 i <<< "$(git_ls_remote_tag_commit_sha1 "${ref_name}" "${remote_urls[@]}")"
+		if [[ -n "${i}" ]]; then
+			answered_source="${remote_sources[i]}"
+		fi
+		display_alert "SHA1 of tag ${ref_name}" "'${sha1}'${sha1:+ from ${answered_source}}" "info"
 	fi
 
 	# Enter loop. The first that resolves to a valid sha1 wins.
@@ -89,7 +103,14 @@ function memoized_git_ref_to_info() {
 				sha1="${to_try}"
 				;;
 			*)
-				sha1="$(git_ls_remote_logged "${ref_type} '${to_try}'" --exit-code "$(git_remote_url_for_mirror "${MEMO_DICT[GIT_SOURCE]}")" "${to_try}" | cut -f1)"
+				for i in "${!remote_urls[@]}"; do
+					# '|| true': a remote that lacks the ref or does not answer is not an error; the next one is asked.
+					sha1="$({ git_ls_remote_logged "${ref_type} '${to_try}'" --exit-code "${remote_urls[i]}" "${to_try}" || true; } | cut -f1)"
+					if [[ "${sha1}" =~ ^[0-9a-f]{40}$ ]]; then
+						answered_source="${remote_sources[i]}"
+						break
+					fi
+				done
 				;;
 		esac
 
@@ -143,73 +164,66 @@ function memoized_git_ref_to_info() {
 
 	if [[ "${2}" == "include_makefile_body" ]]; then
 
-		function obtain_makefile_body_from_git() {
+		# Prints the URL of the Makefile at <sha1> for <git_source>, or nothing for a git host we don't know.
+		function makefile_url_for_git_source() {
 			declare git_source="${1}"
 			declare sha1="${2}"
-			makefile_body="undetermined"     # outer scope
-			makefile_url="undetermined"      # outer scope
-			makefile_version="undetermined"  # outer scope
-			makefile_codename="undetermined" # outer scope
+			declare org_and_repo="" _gr_org _gr_repo
 
-			declare url="undetermined"
 			case "${git_source}" in
 
 				"https://git.kernel.org/pub/scm/linux/kernel/"* | "https://git.ti.com/"*)
-					url="${git_source}/plain/Makefile?h=${sha1}"
+					echo -n "${git_source}/plain/Makefile?h=${sha1}"
 					;;
 
 				"https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux-stable.git" | "https://mirrors.tuna.tsinghua.edu.cn/git/linux-stable.git" | "https://mirrors.bfsu.edu.cn/git/linux-stable.git")
 					# for mainline kernel source, only the origin source support curl
 					case "${GITHUB_MIRROR}" in
 						"ghproxy")
-							url="https://${GHPROXY_ADDRESS}/https://raw.githubusercontent.com/torvalds/linux/${sha1}/Makefile"
+							echo -n "https://${GHPROXY_ADDRESS}/https://raw.githubusercontent.com/torvalds/linux/${sha1}/Makefile"
 							;;
 						*)
-							url="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/Makefile?h=${sha1}"
+							echo -n "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/Makefile?h=${sha1}"
 							;;
 					esac
 					;;
 
 				"https://gitverse.ru/"*)
-					declare org_and_repo=""
 					IFS=/ read -r _ _ _ _gr_org _gr_repo _ <<< "${git_source}"
 					org_and_repo="${_gr_org}/${_gr_repo}"
 					org_and_repo="${org_and_repo%.git}" # remove .git if present
-					url="https://gitverse.ru/api/repos/${org_and_repo}/raw/commit/${sha1}/Makefile"
+					echo -n "https://gitverse.ru/api/repos/${org_and_repo}/raw/commit/${sha1}/Makefile"
 					;;
 
 				"https://gitee.com/"*)
 					# parse org/repo from https://gitee.com/org/repo
-					declare org_and_repo=""
 					IFS=/ read -r _ _ _ _gr_org _gr_repo _ <<< "${git_source}"
 					org_and_repo="${_gr_org}/${_gr_repo}"
 					org_and_repo="${org_and_repo%.git}" # remove .git if present
-					url="https://gitee.com/${org_and_repo}/raw/${sha1}/Makefile"
+					echo -n "https://gitee.com/${org_and_repo}/raw/${sha1}/Makefile"
 					;;
 
 				"https://github.com/"*)
 					# parse org/repo from https://github.com/org/repo
-					declare org_and_repo=""
 					IFS=/ read -r _ _ _ _gr_org _gr_repo _ <<< "${git_source}"
 					org_and_repo="${_gr_org}/${_gr_repo}"
 					org_and_repo="${org_and_repo%.git}" # remove .git if present
 					case "${GITHUB_MIRROR}" in
 						"ghproxy")
-							url="https://${GHPROXY_ADDRESS}/https://raw.githubusercontent.com/${org_and_repo}/${sha1}/Makefile"
+							echo -n "https://${GHPROXY_ADDRESS}/https://raw.githubusercontent.com/${org_and_repo}/${sha1}/Makefile"
 							;;
 						*)
-							url="https://raw.githubusercontent.com/${org_and_repo}/${sha1}/Makefile"
+							echo -n "https://raw.githubusercontent.com/${org_and_repo}/${sha1}/Makefile"
 							;;
 					esac
 					;;
 
-				"https://gitlab.com/"* | "https://source.denx.de/"* | "https://gitlab.collabora.com/"*)
+				"https://gitlab.com/"* | "https://git.u-boot-project.org/"* | "https://source.denx.de/"* | "https://gitlab.collabora.com/"*)
 					# GitLab is more complex than GitHub, there can be more levels.
 					# This code is incomplete... but it works for now.
 					# Example: input:  https://gitlab.com/rk3588_linux/rk/kernel.git
 					#          output: https://gitlab.com/rk3588_linux/rk/kernel/-/raw/linux-5.10/Makefile
-					declare gitlab_path="${git_source%.git}" # remove .git
-					url="${gitlab_path}/-/raw/${sha1}/Makefile"
+					echo -n "${git_source%.git}/-/raw/${sha1}/Makefile"
 					;;
 
 				*)
@@ -219,36 +233,70 @@ function memoized_git_ref_to_info() {
 					# Makefile version is the upstream one, so fetch it from github's
 					# raw endpoint directly (the proxy is for git clones, not raw HTTP).
 					if [[ "${GITHUB_MIRROR}" == "gitproxy" && -n "${GITPROXY_ADDRESS:-}" && "${git_source}" == "${GITPROXY_ADDRESS%/}/"* ]]; then
-						declare org_and_repo=""
 						IFS=/ read -r _ _ _ _gr_org _gr_repo _ <<< "${git_source}"
 						org_and_repo="${_gr_org}/${_gr_repo}"
 						org_and_repo="${org_and_repo%.git}" # remove .git if present
-						url="https://raw.githubusercontent.com/${org_and_repo}/${sha1}/Makefile"
-					else
-						exit_with_error "Unknown git source '${git_source}'"
+						echo -n "https://raw.githubusercontent.com/${org_and_repo}/${sha1}/Makefile"
 					fi
 					;;
 			esac
+		}
 
-			display_alert "Fetching Makefile via HTTP" "${url}" "debug"
-			makefile_url="${url}"
+		# Any source that carries the commit serves the same Makefile; the caller passes the one that answered first.
+		function obtain_makefile_body_from_git() {
+			declare sha1="${1}"
+			shift
+			makefile_body="undetermined"     # outer scope
+			makefile_url="undetermined"      # outer scope
+			makefile_version="undetermined"  # outer scope
+			makefile_codename="undetermined" # outer scope
+
+			declare -a urls=()
+			declare git_source url
+			declare -A seen=()
+			for git_source in "$@"; do
+				url="$(makefile_url_for_git_source "${git_source}" "${sha1}")"
+				if [[ -n "${url}" && -z "${seen["${url}"]:-}" ]]; then
+					seen["${url}"]=1
+					urls+=("${url}")
+				fi
+			done
+
+			if [[ ${#urls[@]} -eq 0 ]]; then
+				# The SHA1 still identifies the sources; the artifact version goes without the Makefile version.
+				display_alert "No Makefile URL known for git host" "${1}: version left out of the artifact version" "warn"
+				makefile_url="" makefile_version="" makefile_full_version="" makefile_codename=""
+				return 0
+			fi
 
 			# Lets do a retry loop here, because GitHub/others are unreliable...
-			declare makefile_body="undetermined"
-			do_with_retries 5 obtain_makefile_body_from_url "${url}"
+			do_with_retries 5 obtain_makefile_body_from_urls "${urls[@]}" ||
+				exit_with_error "No host served the Makefile at ${sha1}" "${urls[*]}"
 
 			parse_makefile_version "${makefile_body}"
 
 			return 0
 		}
 
-		function obtain_makefile_body_from_url() {
-			makefile_body="$(curl -sL --fail "${1}")" || {
-				display_alert "Failed to fetch Makefile from URL" "${1}" "warn"
-				return 1
-			}
-			display_alert "Fetched Makefile from URL" "${1}" "debug"
-			return 0
+		# Sets makefile_body and makefile_url from the first of the URLs that serves the file.
+		function obtain_makefile_body_from_urls() {
+			declare url first_line
+			for url in "$@"; do
+				display_alert "Fetching Makefile via HTTP" "${url}" "debug"
+				# A host that accepts the connection and then goes silent hands over to the next one.
+				if ! makefile_body="$(curl -sSL --fail --connect-timeout 15 --speed-limit 1000 --speed-time 15 "${url}")"; then
+					display_alert "Failed to fetch Makefile from URL" "${url}" "warn"
+				elif ! grep -qE '^VERSION[[:space:]]*=[[:space:]]*[0-9]' <<< "${makefile_body}"; then
+					# A host that lacks the commit may answer 200 with a page of its own.
+					first_line="${makefile_body%%$'\n'*}"
+					display_alert "No VERSION line in Makefile from URL" "${url}: ${first_line:0:120}" "warn"
+				else
+					makefile_url="${url}"
+					display_alert "Fetched Makefile from URL" "${url}" "debug"
+					return 0
+				fi
+			done
+			return 1
 		}
 
 		function parse_makefile_version() {
@@ -295,7 +343,7 @@ function memoized_git_ref_to_info() {
 		display_alert "Fetching Makefile body" "${ref_name}" "debug"
 		declare makefile_body makefile_url
 		declare makefile_version makefile_codename makefile_full_version
-		obtain_makefile_body_from_git "${MEMO_DICT[GIT_SOURCE]}" "${sha1}"
+		obtain_makefile_body_from_git "${sha1}" "${answered_source}" "${remote_sources[@]}"
 		MEMO_DICT+=(["MAKEFILE_URL"]="${makefile_url}")
 		#MEMO_DICT+=(["MAKEFILE_BODY"]="${makefile_body}") # large, don't store
 		MEMO_DICT+=(["MAKEFILE_VERSION"]="${makefile_version}")

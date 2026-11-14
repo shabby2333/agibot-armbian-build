@@ -35,9 +35,18 @@ load ${devtype} ${devnum} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 fdt addr ${fdt_addr_r}
 fdt resize 65536
 
+# overlay_prefix holds one or more prefixes. The first match wins. Full overlay names also work.
 for overlay_file in ${overlays}; do
-	if load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix}-${overlay_file}.dtbo; then
-		echo "Applying kernel provided DT overlay ${overlay_prefix}-${overlay_file}.dtbo"
+	setenv overlay_found "false"
+	for overlay_prefix_item in ${overlay_prefix}; do
+		if test "${overlay_found}" = "false" && test -e ${devtype} ${devnum} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-${overlay_file}.dtbo && load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-${overlay_file}.dtbo; then
+			setenv overlay_found "true"
+			echo "Applying kernel provided DT overlay ${overlay_prefix_item}-${overlay_file}.dtbo"
+			fdt apply ${scriptaddr} || setenv overlay_error "true"
+		fi
+	done
+	if test "${overlay_found}" = "false" && test -e ${devtype} ${devnum} ${prefix}dtb/amlogic/overlay/${overlay_file}.dtbo && load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_file}.dtbo; then
+		echo "Applying kernel provided DT overlay ${overlay_file}.dtbo"
 		fdt apply ${scriptaddr} || setenv overlay_error "true"
 	fi
 done
@@ -53,15 +62,24 @@ if test "${overlay_error}" = "true"; then
 	echo "Error applying DT overlays, restoring original DT"
 	load ${devtype} ${devnum} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 else
-	if load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix}-fixup.scr; then
-		echo "Applying kernel provided DT fixup script (${overlay_prefix}-fixup.scr)"
-		source ${scriptaddr}
-	fi
+	for overlay_prefix_item in ${overlay_prefix}; do
+		if test -e ${devtype} ${devnum} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-fixup.scr && load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-fixup.scr; then
+			echo "Applying kernel provided DT fixup script (${overlay_prefix_item}-fixup.scr)"
+			source ${scriptaddr}
+		fi
+	done
 	if test -e ${devtype} ${devnum} ${prefix}fixup.scr; then
 		load ${devtype} ${devnum} ${scriptaddr} ${prefix}fixup.scr
 		echo "Applying user provided fixup script (fixup.scr)"
 		source ${scriptaddr}
 	fi
+fi
+
+# Khadas U-Boot reads the board MAC address from eFuse into eth_mac.
+# Mainline kernels take the MAC address only from the DT.
+if test -n "${eth_mac}"; then
+	setexpr eth_mac_dt gsub : " " "${eth_mac}"
+	fdt set /ethernet@fdc00000 local-mac-address "[${eth_mac_dt}]" || fdt set /soc/ethernet@fdc00000 local-mac-address "[${eth_mac_dt}]"
 fi
 
 # The symlinks for kernel and initrd.img are at different locations in debian and ubuntu

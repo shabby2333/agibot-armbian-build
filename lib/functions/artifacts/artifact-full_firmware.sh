@@ -16,9 +16,6 @@ function artifact_full_firmware_prepare_version() {
 	artifact_version="undetermined"        # outer scope
 	artifact_version_reason="undetermined" # outer scope
 
-	local ARMBIAN_FIRMWARE_SOURCE="${ARMBIAN_FIRMWARE_GIT_SOURCE:-"https://github.com/armbian/firmware"}"
-	local ARMBIAN_FIRMWARE_BRANCH="branch:${ARMBIAN_FIRMWARE_GIT_BRANCH:-"master"}"
-
 	debug_var ARMBIAN_FIRMWARE_SOURCE
 	debug_var ARMBIAN_FIRMWARE_BRANCH
 	debug_var MAINLINE_FIRMWARE_SOURCE
@@ -32,7 +29,8 @@ function artifact_full_firmware_prepare_version() {
 	# Sanity check, the SHA1 gotta be sane.
 	[[ "${GIT_INFO_ARMBIAN_FIRMWARE[SHA1]}" =~ ^[0-9a-f]{40}$ ]] || exit_with_error "SHA1 is not sane: '${GIT_INFO_ARMBIAN_FIRMWARE[SHA1]}'"
 
-	declare -A GIT_INFO_MAINLINE_FIRMWARE=([GIT_SOURCE]="${MAINLINE_FIRMWARE_SOURCE}" [GIT_REF]="branch:main")
+	mainline_firmware_resolve_git_ref
+	declare -A GIT_INFO_MAINLINE_FIRMWARE=([GIT_SOURCE]="${MAINLINE_FIRMWARE_SOURCE}" [GIT_REF]="${MAINLINE_FIRMWARE_BRANCH}")
 	run_memoized GIT_INFO_MAINLINE_FIRMWARE "git2info" memoized_git_ref_to_info
 	debug_dict GIT_INFO_MAINLINE_FIRMWARE
 
@@ -87,7 +85,7 @@ function artifact_full_firmware_cli_adapter_config_prep() {
 }
 
 function artifact_full_firmware_get_default_oci_target() {
-	artifact_oci_target_base="${GHCR_SOURCE}/armbian/os/"
+	artifact_oci_target_base="${OCI_SERVER}/${OCI_PATH}/"
 }
 
 function artifact_full_firmware_is_available_in_local_cache() {

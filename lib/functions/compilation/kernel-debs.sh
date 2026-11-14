@@ -228,16 +228,18 @@ function kernel_package_callback_linux_image() {
 		local stubble_sbat="${STUBBLE_SBAT_PATH:-/usr/share/stubble/sbat}"
 
 		# Run finddtbs and validate output
-		stubble_dtbs_raw=$("${stubble_find_dtbs}" "${tmp_kernel_install_dirs[INSTALL_DTBS_PATH]}" "${stubble_hwids}")
+		stubble_dtbs_raw=$("${stubble_find_dtbs}" "${tmp_kernel_install_dirs[INSTALL_DTBS_PATH]}" "${stubble_hwids}" "${STUBBLE_MACHDB_PATH:-}")
 		if [[ $? -ne 0 ]]; then
 			exit_with_error "finddtbs.py failed" "${stubble_find_dtbs}"
 		fi
 		stubble_dtbs=$(echo "${stubble_dtbs_raw}" | sed 's|.*|--devicetree-auto=&|' | tr '\n' ' ')
-		# EXTRA_STUBBLE_DEVICETREES: family-supplied DTBs not yet in stubble hwids (see uefidt.conf).
+		# EXTRA_STUBBLE_DEVICETREES: family-supplied DTBs not yet in stubble hwids (see uefi-arm64-dt.conf).
 		for extra_dtb in "${EXTRA_STUBBLE_DEVICETREES[@]}"; do
 			stubble_dtbs+=" --devicetree-auto=${tmp_kernel_install_dirs[INSTALL_DTBS_PATH]}/${extra_dtb}"
 		done
-		run_host_command_logged /usr/bin/ukify build --linux="${kernel_image_pre_package_path}" --stub="${stubble_efi}" --hwids="${stubble_hwids}" --sbat="@${stubble_sbat}" ${stubble_dtbs} --output="${kernel_pre_package_path}/${kernel_image_name}-${kernel_version_family}.efi"
+		declare stubble_machdb_arg=""
+		[[ -s "${STUBBLE_MACHDB_PATH:-}" ]] && stubble_machdb_arg="--section=.machdb:@${STUBBLE_MACHDB_PATH}"
+		run_host_command_logged /usr/bin/ukify build --linux="${kernel_image_pre_package_path}" --stub="${stubble_efi}" --hwids="${stubble_hwids}" --sbat="@${stubble_sbat}" ${stubble_machdb_arg} ${stubble_dtbs} --output="${kernel_pre_package_path}/${kernel_image_name}-${kernel_version_family}.efi"
 		run_host_command_logged mv "${kernel_pre_package_path}/${kernel_image_name}-${kernel_version_family}.efi" "${kernel_pre_package_path}/${kernel_image_name}-${kernel_version_family}"
 	fi
 	display_alert "Showing contents of Kbuild produced /boot" "linux-image" "debug"
@@ -332,9 +334,25 @@ function kernel_package_callback_linux_image() {
 				# hook exit status, always do the relink, and re-surface the failure at the
 				# very end (see HOOK_FOR_PROPAGATE_HOOK_RC) so apt/dpkg still reports it and
 				# retries -- it self-heals once linux-headers is configured.
+				# In one apt run, dpkg can configure linux-image before linux-headers.
+				# The unpacked headers tree has no compiled scripts yet, so DKMS fails.
+				# Skip the dkms hook then: the headers postinst builds DKMS.
 				cat <<- KERNEL_HOOK_DELEGATION_POSTINST
 					hook_rc=0
-					test -d ${debian_kernel_hook_dir}/${script}.d && { run-parts --arg="${kernel_version_family}" --arg="/${installed_image_path}" ${debian_kernel_hook_dir}/${script}.d || hook_rc=\$?; }
+					skip_hook=""
+					case "\$(dpkg-query -W -f='\${db:Status-Abbrev}' linux-headers-${BRANCH}-${LINUXFAMILY} 2>/dev/null || true)" in
+						?[UF]*) skip_hook="dkms" ;;
+					esac
+					if [ -d ${debian_kernel_hook_dir}/${script}.d ]; then
+						hooks="\$(run-parts --test ${debian_kernel_hook_dir}/${script}.d)" || hook_rc=\$?
+						for hook in \${hooks}; do
+							if [ "\${hook##*/}" = "\${skip_hook}" ]; then
+								echo "Armbian: linux-headers-${BRANCH}-${LINUXFAMILY} not configured yet, its postinst builds DKMS modules. Skipping \${hook}."
+								continue
+							fi
+							"\${hook}" "${kernel_version_family}" "/${installed_image_path}" || hook_rc=\$?
+						done
+					fi
 				KERNEL_HOOK_DELEGATION_POSTINST
 			else
 				cat <<- KERNEL_HOOK_DELEGATION
@@ -345,7 +363,7 @@ function kernel_package_callback_linux_image() {
 			if [[ "${script}" == "preinst" ]]; then
 				cat <<- HOOK_FOR_REMOVE_VFAT_BOOT_FILES
 					if is_boot_dev_vfat; then
-						rm -f /boot/System.map* /boot/config* /boot/vmlinuz* /boot/$image_name /boot/uImage
+						rm -f /boot/System.map* /boot/config* /boot/vmlinuz* /boot/$image_name /boot/$image_name.tmp /boot/uImage
 					fi
 				HOOK_FOR_REMOVE_VFAT_BOOT_FILES
 			fi
@@ -355,8 +373,22 @@ function kernel_package_callback_linux_image() {
 				cat <<- HOOK_FOR_LINK_TO_LAST_INSTALLED_KERNEL # image_name="${NAME_KERNEL}", above
 					touch /boot/.next
 					if is_boot_dev_vfat; then
-						echo "Armbian: FAT32 /boot: move last-installed kernel to '$image_name'..."
-						mv -v /${installed_image_path} /boot/${image_name}
+						# Copy, not move: the postinst is re-run after a failing
+						# postinst.d hook, and a move leaves nothing for the retry.
+						# Temp + sync + rename so an interrupted write can't leave a torn image.
+						# Existing installs keep their old, smaller /boot: if the copy does not
+						# fit, fall back to the move, which is a rename within /boot.
+						if [ -f /${installed_image_path} ]; then
+							echo "Armbian: FAT32 /boot: copy last-installed kernel to '$image_name'..."
+							if ! { cp -v /${installed_image_path} /boot/${image_name}.tmp && sync && mv -f /boot/${image_name}.tmp /boot/${image_name}; }; then
+								rm -f /boot/${image_name}.tmp
+								echo "Armbian: FAT32 /boot: no room to copy, moving kernel to '$image_name' instead..."
+								mv -v /${installed_image_path} /boot/${image_name}
+							fi
+						elif [ ! -f /boot/${image_name} ]; then
+							echo "Armbian: FAT32 /boot: neither /${installed_image_path} nor /boot/${image_name} exists" >&2
+							exit 1
+						fi
 					else
 						echo "Armbian: update last-installed kernel symlink to '$image_name'..."
 						ln -sfv $(basename "${installed_image_path}") /boot/$image_name
@@ -585,7 +617,7 @@ function kernel_package_callback_linux_headers() {
 		Architecture: ${ARCH}
 		Priority: optional
 		Provides: linux-headers (= ${kernel_version}), linux-headers-armbian, armbian-$BRANCH
-		Depends: make, gcc, libc6-dev, bison, flex, libssl-dev, libelf-dev, pahole | dwarves
+		Depends: make, gcc, libc6-dev, bison, flex, libssl-dev, libelf-dev, pahole | dwarves, python3-minimal
 		Description: Armbian Linux $BRANCH headers ${kernel_version_family}
 		 This package provides kernel header files for ${kernel_version_family}
 		 .
@@ -650,7 +682,35 @@ function kernel_package_callback_linux_headers() {
 				tar -C . -xzf include/generated/.armbian-build.tar.gz
 				rm -f include/generated/.armbian-build.tar.gz
 			fi
+
+			# The build host gcc may know -fmin-function-alignment (gcc 14+) while the target gcc does not.
+			# Drop the probe results then, so out-of-tree modules fall back to -falign-functions and no __cold.
+			if [[ -f include/config/auto.conf ]] && grep -q '^CONFIG_CC_HAS_MIN_FUNCTION_ALIGNMENT=y' include/config/auto.conf; then
+				if ! echo 'int x;' | gcc -fmin-function-alignment=4 -x c -c -o /dev/null - 2> /dev/null; then
+					echo "Target gcc lacks -fmin-function-alignment; disabling CONFIG_CC_HAS_MIN_FUNCTION_ALIGNMENT."
+					sed -i -E '/^CONFIG_CC_HAS_(MIN|SANE)_FUNCTION_ALIGNMENT=/d' include/config/auto.conf
+					sed -i -E '/define CONFIG_CC_HAS_(MIN|SANE)_FUNCTION_ALIGNMENT /d' include/generated/autoconf.h
+				fi
+			fi
 		EOT_POSTINST_FINISH
+
+		# Now that the header tree is compiled, run the same header hooks Debian runs
+		# from its linux-headers postinst. dkms ships /etc/kernel/header_postinst.d/dkms,
+		# which (re)builds DKMS modules for this kernel version. This is the safety net
+		# that makes the linux-image / linux-headers configure ORDER irrelevant: if the
+		# image is configured first (e.g. in a single apt transaction), its DKMS
+		# autoinstall runs with no headers present and fails; building here, when the
+		# headers land, completes the module on the first pass. Without this hook Armbian
+		# only ever built DKMS from the linux-image postinst, so a transaction that
+		# configured the image before its headers left the module unbuilt -- and,
+		# pre-#10766, could abort the image postinst before the boot-symlink relink and
+		# leave the board unbootable. Non-fatal: a broken out-of-tree module must not
+		# stop the headers package from installing.
+		cat <<- EOT_POSTINST_HEADER_HOOKS
+			if [ -d /etc/kernel/header_postinst.d ]; then
+				DEB_MAINT_PARAMS="\$*" run-parts --arg="${kernel_version_family}" /etc/kernel/header_postinst.d || true
+			fi
+		EOT_POSTINST_HEADER_HOOKS
 	)
 }
 

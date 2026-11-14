@@ -1,0 +1,200 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alastair D'Silva <deece@users.noreply.github.com>
+Date: Wed, 17 Jun 2026 14:24:40 +0100
+Subject: [ARCHEOLOGY] Feature/sunxi mainline stmmac ac300 (#9952)
+
+> X-Git-Archeology: > recovered message: > * sunxi: H618: drop unused legacy vendor sunxi-gmac driver and align Orange Pi Zero 2W
+> X-Git-Archeology: > recovered message: > Remove the unused legacy vendor GMAC driver from patches. Revert syscon register range changes in the Orange Pi Zero 2W patch to align it with standard mainline stmmac bindings.
+> X-Git-Archeology: > recovered message: > The vendor GMAC was only referenced in the Orange Pi Zero 2W (where it was broken) and the Banana Pi M4 Berry board (where it was disabled), making it completely safe to remove.
+> X-Git-Archeology: > recovered message: > Signed-off-by: Alastair D'Silva <alastair@d-silva.org>
+> X-Git-Archeology: > recovered message: > Assisted-by: Antigravity <antigravity@google.com>
+> X-Git-Archeology: > recovered message: > * sunxi: EPHY: add dedicated modular AC300 EPHY driver
+> X-Git-Archeology: > recovered message: > Introduce a dedicated, mainline-quality Clause 22 PHY driver for the Allwinner AC300 Ethernet PHY. This driver matches the AC300 EPHY via a custom compatible string and communicates directly over MDIO.
+> X-Git-Archeology: > recovered message: > We compile the driver directly into the kernel (CONFIG_AC300_PHY=y) instead of building a module (CONFIG_AC300_PHY=m) for the following reasons:
+> X-Git-Archeology: > recovered message: > - The integrated AC300 EPHY starts in a powered-down state.
+> X-Git-Archeology: > recovered message: > - The MAC controller driver (dwmac-sun8i) is compiled in (y). If the AC300 PHY driver is built as a module (m), early MAC driver probing during boot will default to binding the generic C22 PHY driver because the AC300 module cannot be loaded yet.
+> X-Git-Archeology: > recovered message: > - Without the custom AC300 PHY driver's early SYSCON configuration, clock gating setup, and Bandgap calibration programming, the EPHY will fail to negotiate a stable link or establish packet transmission on boot.
+> X-Git-Archeology: > recovered message: > - Compiling the driver directly in ensures that it is immediately available to bind when the MAC probes, allowing out-of-the-box DHCP and network access.
+> X-Git-Archeology: > recovered message: > Signed-off-by: Alastair D'Silva <alastair@d-silva.org>
+> X-Git-Archeology: > recovered message: > Assisted-by: Antigravity <antigravity@google.com>
+> X-Git-Archeology: > recovered message: > * sunxi: EPHY: Support internal PHYs for H616 in the stmmac driver
+> X-Git-Archeology: > recovered message: > Introduce support for the co-packaged internal Ethernet Physical Layer (EPHY)
+> X-Git-Archeology: > recovered message: > on Allwinner H616/H618 SoCs in the mainline dwmac-sun8i driver.
+> X-Git-Archeology: > recovered message: > This adds internal PHY handling changes:
+> X-Git-Archeology: > recovered message: > - Define emac_variant_h616_internal with internal PHY, MII, RMII, and RGMII support.
+> X-Git-Archeology: > recovered message: > - Delay the MAC software reset until sun8i_dwmac_init phase. For internal PHYs,
+> X-Git-Archeology: > recovered message: > doing a MAC software reset during early probe/mux-switching fails with an EMAC
+> X-Git-Archeology: > recovered message: > reset timeout because the internal PHY's clocks are not yet active.
+> X-Git-Archeology: > recovered message: > - Skip setting H3_EPHY_SELECT for the H616 syscon MDIO mux configuration, as
+> X-Git-Archeology: > recovered message: > this bit is not applicable to H616/H618.
+> X-Git-Archeology: > recovered message: > - Add stable locally-administered MAC address generation derived from the SoC chip ID
+> X-Git-Archeology: > recovered message: > when a valid hardware address is not present.
+> X-Git-Archeology: > recovered message: > Signed-off-by: Alastair D'Silva <alastair@d-silva.org>
+> X-Git-Archeology: > recovered message: > Assisted-by: Antigravity <antigravity@google.com>
+> X-Git-Archeology: > recovered message: > * sunxi: orangepi-zero2w: Enable AC300 EPHY in device tree patches
+> X-Git-Archeology: > recovered message: > Signed-off-by: Alastair D'Silva <alastair@d-silva.org>
+> X-Git-Archeology: > recovered message: > Assisted-by: Antigravity <antigravity@google.com>
+> X-Git-Archeology: > recovered message: > ---------
+> X-Git-Archeology: > recovered message: > Signed-off-by: Alastair D'Silva <alastair@d-silva.org>
+> X-Git-Archeology: - Revision 21fb43ef2c1deb4a3643f9f9921823f94fd87f26: https://github.com/armbian/build/commit/21fb43ef2c1deb4a3643f9f9921823f94fd87f26
+> X-Git-Archeology:   Date: Wed, 17 Jun 2026 14:24:40 +0100
+> X-Git-Archeology:   From: Alastair D'Silva <deece@users.noreply.github.com>
+> X-Git-Archeology:   Subject: Feature/sunxi mainline stmmac ac300 (#9952)
+> X-Git-Archeology:
+>
+> Rebased on top of the upstream 7.4 dwmac-sun8i fixes (d9750b3c4c27 "Fix EPHY
+> clock leak in get_ephy_nodes()" and fee9c17671b6 "reset the MAC after PHY
+> initialization"): the MAC software reset now happens in sun8i_dwmac_dma_reset()
+> after the PHY is initialized, so the extra reset in sun8i_dwmac_init() is gone;
+> the MDIO-mux reset is still skipped for the internal PHY, and get_ephy_nodes()
+> keeps the clock/reset optional handling on top of the local-variable version.
+---
+ drivers/net/ethernet/stmicro/stmmac/dwmac-sun8i.c | 68 ++++++++++++++++--
+ 1 file changed, 62 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/ethernet/stmicro/stmmac/dwmac-sun8i.c b/drivers/net/ethernet/stmicro/stmmac/dwmac-sun8i.c
+index 111111111111..222222222222 100644
+--- a/drivers/net/ethernet/stmicro/stmmac/dwmac-sun8i.c
++++ b/drivers/net/ethernet/stmicro/stmmac/dwmac-sun8i.c
+@@ -6,7 +6,10 @@
+  */
+ 
+ #include <linux/clk.h>
++#include <linux/etherdevice.h>
+ #include <linux/io.h>
++
++extern int sunxi_get_soc_chipid(unsigned char *chipid);
+ #include <linux/iopoll.h>
+ #include <linux/mdio-mux.h>
+ #include <linux/mfd/syscon.h>
+@@ -130,6 +133,16 @@
+ 	.tx_delay_max = 7,
+ };
+ 
++static const struct emac_variant emac_variant_h616_internal = {
++	.syscon_field = &sun8i_syscon_reg_field,
++	.soc_has_internal_phy = true,
++	.support_mii = true,
++	.support_rmii = true,
++	.support_rgmii = true,
++	.rx_delay_max = 31,
++	.tx_delay_max = 7,
++};
++
+ static const struct emac_variant emac_variant_h6 = {
+ 	.syscon_field = &sun8i_syscon_reg_field,
+ 	/* The "Internal PHY" of H6 is not on the die. It's on the
+@@ -787,17 +800,23 @@
+ 		struct clk *ephy_clk;
+ 
+ 		ephy_clk = of_clk_get(iphynode, 0);
+-		if (IS_ERR(ephy_clk))
+-			continue;
++		if (IS_ERR(ephy_clk)) {
++			ret = PTR_ERR(ephy_clk);
++			if (ret == -EPROBE_DEFER) {
++				of_node_put(mdio_internal);
++				return ret;
++			}
++			ephy_clk = NULL;
++		}
+ 		gmac->rst_ephy = of_reset_control_get_exclusive(iphynode, NULL);
+ 		if (IS_ERR(gmac->rst_ephy)) {
+ 			ret = PTR_ERR(gmac->rst_ephy);
+-			clk_put(ephy_clk);
+ 			if (ret == -EPROBE_DEFER) {
++				clk_put(ephy_clk);
+ 				of_node_put(mdio_internal);
+ 				return ret;
+ 			}
+-			continue;
++			gmac->rst_ephy = NULL;
+ 		}
+ 		gmac->ephy_clk = ephy_clk;
+ 		dev_info(priv->device, "Found internal PHY node\n");
+@@ -876,7 +895,9 @@
+ 		switch (desired_child) {
+ 		case DWMAC_SUN8I_MDIO_MUX_INTERNAL_ID:
+ 			dev_info(priv->device, "Switch mux to internal PHY");
+-			val = (reg & ~H3_EPHY_MUX_MASK) | H3_EPHY_SELECT;
++			val = (reg & ~H3_EPHY_MUX_MASK);
++			if (gmac->variant != &emac_variant_h616_internal)
++				val |= H3_EPHY_SELECT;
+ 			gmac->use_internal_phy = true;
+ 			break;
+ 		case DWMAC_SUN8I_MDIO_MUX_EXTERNAL_ID:
+@@ -897,12 +918,17 @@
+ 		} else {
+ 			sun8i_dwmac_unpower_internal_phy(gmac);
+ 		}
+-		/* After changing syscon value, the MAC need reset or it will
+-		 * use the last value (and so the last PHY set).
+-		 */
+-		ret = sun8i_dwmac_reset(priv->ioaddr);
+-		if (ret)
+-			dev_err(priv->device, "EMAC reset timeout\n");
++		if (!gmac->use_internal_phy) {
++			/* After changing syscon value, the MAC need reset or it will
++			 * use the last value (and so the last PHY set).
++			 * For the internal PHY the reset would time out here because
++			 * the PHY is not clocked yet; the MAC is reset later from
++			 * sun8i_dwmac_dma_reset(), after the PHY is initialized.
++			 */
++			ret = sun8i_dwmac_reset(priv->ioaddr);
++			if (ret)
++				dev_err(priv->device, "EMAC reset timeout\n");
++		}
+ 	}
+ 	return ret;
+ }
+@@ -1007,9 +1033,13 @@
+ 
+ static void sun8i_dwmac_unset_syscon(struct sunxi_priv_data *gmac)
+ {
+-	if (gmac->variant->soc_has_internal_phy)
+-		regmap_field_write(gmac->regmap_field,
+-				   (H3_EPHY_SHUTDOWN | H3_EPHY_SELECT));
++	if (gmac->variant->soc_has_internal_phy) {
++		u32 val = H3_EPHY_SHUTDOWN;
++
++		if (gmac->variant != &emac_variant_h616_internal)
++			val |= H3_EPHY_SELECT;
++		regmap_field_write(gmac->regmap_field, val);
++	}
+ }
+ 
+ static void sun8i_dwmac_exit(struct device *dev, void *priv)
+@@ -1185,6 +1215,21 @@
+ 	}
+ 
+ 	plat_dat = devm_stmmac_probe_config_dt(pdev, stmmac_res.mac);
++	if (!IS_ERR(plat_dat) && is_zero_ether_addr(stmmac_res.mac)) {
++		u8 chipid[16];
++		if (sunxi_get_soc_chipid(chipid) == 0) {
++			if (!memchr_inv(chipid, 0, 16))
++				return -EPROBE_DEFER;
++			stmmac_res.mac[0] = 0x02; /* Locally administered unicast */
++			stmmac_res.mac[1] = chipid[0] ^ chipid[1] ^ chipid[2];
++			stmmac_res.mac[2] = chipid[3] ^ chipid[4] ^ chipid[5];
++			stmmac_res.mac[3] = chipid[6] ^ chipid[7] ^ chipid[8];
++			stmmac_res.mac[4] = chipid[9] ^ chipid[10] ^ chipid[11];
++			stmmac_res.mac[5] = chipid[12] ^ chipid[13] ^ chipid[14] ^ chipid[15];
++			dev_info(dev, "dwmac-sun8i: generated stable MAC address from chipid: %pM\n",
++				 stmmac_res.mac);
++		}
++	}
+ 	if (IS_ERR(plat_dat))
+ 		return PTR_ERR(plat_dat);
+ 
+@@ -1289,6 +1334,8 @@
+ 		.data = &emac_variant_h6 },
+ 	{ .compatible = "allwinner,sun50i-h616-emac",
+ 		.data = &emac_variant_h6 },
++	{ .compatible = "allwinner,sun50i-h616-internal-emac",
++		.data = &emac_variant_h616_internal },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, sun8i_dwmac_match);
+-- 
+Armbian
+
